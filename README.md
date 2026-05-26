@@ -9,7 +9,7 @@ Ingests user reviews, clusters them into themes, and opens PRs for the highest-i
 
 스펙 §1.4의 **Phase 1(per-review 순수 파이프라인)** 전체 + **Phase 2(`aggregateSignal`, cross-review
 증거 집계)**까지 구현했다. Phase 2의 async reconciliation은 인터페이스 + purity 메트릭만(merge/split
-로직은 스펙대로 후속 — `src/pipeline/reconciliation.ts`).
+로직은 스펙대로 후속 — `src/processing/pipeline/reconciliation.ts`).
 
 ### 빠른 시작
 
@@ -114,8 +114,7 @@ LLM_CLIENT=claude-cli npm run run:corpus            # bash
 ```
 src/contracts/   RawReview · ProcessedReview(facts/inferences/versions) · Stage zod 스키마
 src/clients/     llm/{stub,anthropic} · embedding/{local,cohere} (+ env 팩토리)
-src/stages/      11개 per-review stage (순수 함수 시그니처, ctx 주입)
-src/pipeline/    runner(version-aware input_hash 캐시) · phase1(오케스트레이션) · context
+src/processing/  Processing 레이어 — stages/(per-review stage, 순수 함수 + ctx 주입) · pipeline/(runner: version-aware input_hash 캐시, phase1: 오케스트레이션, context, reconciliation) · index.ts(엔트리)
 src/db/          Db (pg + pgvector 직렬화, 모든 쿼리)
 db/migrations/   001_init.sql (§5 스키마)
 corpus/          합성 리뷰 코퍼스

@@ -1,6 +1,6 @@
-import type { Db } from '../db/db.js';
-import type { Inferences } from '../contracts/processed-review.js';
-import { thresholds } from '../config.js';
+import type { Db } from '../../db/db.js';
+import type { Inferences } from '../../contracts/processed-review.js';
+import { thresholds } from '../../config.js';
 
 // 4.5b semanticCache — classify LLM 호출 전에 의미적으로 동일한 과거 결과 재사용.
 // poisoning 방어(#7): 동일 classifier_version + 고신뢰(≥0.85) 적재분만 소스로.

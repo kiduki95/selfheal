@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { normalize } from '../src/stages/normalize.js';
-import { extractPII } from '../src/stages/extract-pii.js';
-import { detectLanguage } from '../src/stages/detect-language.js';
-import { prefilter } from '../src/stages/prefilter.js';
+import { normalize } from '../src/processing/stages/normalize.js';
+import { extractPII } from '../src/processing/stages/extract-pii.js';
+import { detectLanguage } from '../src/processing/stages/detect-language.js';
+import { prefilter } from '../src/processing/stages/prefilter.js';
 import { StubLlmClient } from '../src/clients/llm/stub.js';
 import { LocalEmbeddingClient } from '../src/clients/embedding/local.js';
 import { cosine } from '../src/util/vector.js';

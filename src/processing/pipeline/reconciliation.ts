@@ -1,4 +1,4 @@
-import type { Db } from '../db/db.js';
+import type { Db } from '../../db/db.js';
 
 // async reconciliation job (스펙 §4.8b (3), #2) — 인터페이스/이벤트만 v0.5에 고정, 로직은 후속.
 // inline 배정은 보수적·provisional이므로, 주기적으로 그룹 purity를 점검해 merge/split/representative

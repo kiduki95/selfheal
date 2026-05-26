@@ -1,8 +1,8 @@
-import type { Db } from '../db/db.js';
-import type { EmbeddingClient } from '../clients/embedding/types.js';
-import type { ArtifactMatchSchema } from '../contracts/processed-review.js';
+import type { Db } from '../../db/db.js';
+import type { EmbeddingClient } from '../../clients/embedding/types.js';
+import type { ArtifactMatchSchema } from '../../contracts/processed-review.js';
 import type { z } from 'zod';
-import { thresholds } from '../config.js';
+import { thresholds } from '../../config.js';
 
 type ArtifactMatch = z.infer<typeof ArtifactMatchSchema>;
 

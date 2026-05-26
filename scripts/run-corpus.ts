@@ -1,9 +1,7 @@
 import { Db } from '../src/db/db.js';
-import { makeContext } from '../src/pipeline/context.js';
-import { processReview, type ProcessOutcome } from '../src/pipeline/phase1.js';
+import { makeContext, processReview, type ProcessOutcome, runReconciliation } from '../src/processing/index.js';
 import { CORPUS } from '../corpus/reviews.js';
 import { config } from '../src/config.js';
-import { runReconciliation } from '../src/pipeline/reconciliation.js';
 import { InMemoryMetrics } from '../src/observability/metrics.js';
 import { psi, psiLabel } from '../src/observability/psi.js';
 

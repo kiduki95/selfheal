@@ -1,7 +1,7 @@
-import type { Db } from '../db/db.js';
-import type { LlmClient } from '../clients/llm/types.js';
+import type { Db } from '../../db/db.js';
+import type { LlmClient } from '../../clients/llm/types.js';
 import type { z } from 'zod';
-import type { FeatureMappingSchema } from '../contracts/processed-review.js';
+import type { FeatureMappingSchema } from '../../contracts/processed-review.js';
 
 type FeatureMapping = z.infer<typeof FeatureMappingSchema>;
 

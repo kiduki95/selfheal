@@ -17,12 +17,16 @@
     "run:corpus": "tsx scripts/run-corpus.ts",
     "insight": "tsx scripts/insight.ts",
     "ui": "tsx scripts/ui-server.ts",
+    "serve": "tsx scripts/serve.ts",
     "verify": "tsx scripts/migrate.ts && tsx scripts/seed-registries.ts && tsx scripts/run-corpus.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
+    "@hono/node-server": "^2.0.4",
+    "@hono/zod-validator": "^0.8.0",
     "franc-min": "^6.2.0",
+    "hono": "^4.12.23",
     "pg": "^8.13.1",
     "zod": "^3.24.1"
   },

@@ -1,8 +1,8 @@
-import type { Db } from '../db/db.js';
-import type { EmbeddingClient } from '../clients/embedding/types.js';
-import type { FeatureMatchSchema } from '../contracts/processed-review.js';
+import type { Db } from '../../db/db.js';
+import type { EmbeddingClient } from '../../clients/embedding/types.js';
+import type { FeatureMatchSchema } from '../../contracts/processed-review.js';
 import type { z } from 'zod';
-import { thresholds } from '../config.js';
+import { thresholds } from '../../config.js';
 
 type FeatureMatch = z.infer<typeof FeatureMatchSchema>;
 

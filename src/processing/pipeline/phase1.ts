@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { PipelineCtx } from '../contracts/stage.js';
-import { RawReviewSchema, type RawReview } from '../contracts/raw-review.js';
+import type { PipelineCtx } from '../../contracts/stage.js';
+import { RawReviewSchema, type RawReview } from '../../contracts/raw-review.js';
 import {
   ProcessedReviewSchema,
   type ProcessedReview,
   type Inferences,
   type LlmCallRecord,
-} from '../contracts/processed-review.js';
+} from '../../contracts/processed-review.js';
 import { runCached } from './runner.js';
 import { normalize } from '../stages/normalize.js';
 import { detectLanguage } from '../stages/detect-language.js';
@@ -18,10 +18,10 @@ import { semanticCache } from '../stages/semantic-cache.js';
 import { classifyExtractModerate } from '../stages/classify-extract-moderate.js';
 import { mapFeature } from '../stages/map-feature.js';
 import { mapCodeArtifacts } from '../stages/map-code-artifacts.js';
-import { config } from '../config.js';
+import { config } from '../../config.js';
 import { aggregateSignal, recordResolutionReport } from '../stages/aggregate-signal.js';
-import { canonicalizeErrorSignature } from '../util/error-signature.js';
-import { simhash64 } from '../util/simhash.js';
+import { canonicalizeErrorSignature } from '../../util/error-signature.js';
+import { simhash64 } from '../../util/simhash.js';
 
 // per-review 처리 결과 요약 (funnel/관찰가능성용)
 export interface ProcessOutcome {

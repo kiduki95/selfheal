@@ -1,5 +1,5 @@
-import type { LlmClient } from '../clients/llm/types.js';
-import type { LlmCallRecord } from '../contracts/processed-review.js';
+import type { LlmClient } from '../../clients/llm/types.js';
+import type { LlmCallRecord } from '../../contracts/processed-review.js';
 
 // 4.5 translate — conditional (language !== 'en'). Haiku 4.5 (stub일 땐 가짜).
 export async function translate(

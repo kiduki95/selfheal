@@ -1,5 +1,5 @@
-import type { Db } from '../db/db.js';
-import { thresholds } from '../config.js';
+import type { Db } from '../../db/db.js';
+import { thresholds } from '../../config.js';
 
 // 4.4 dedup — 2-source 후보(SimHash 어휘 + 임베딩 ANN 의미) + cosine 2-band 검증.
 //   cosine ≥ 0.95          → is_duplicate (ProcessedReview 안 만듦, raw.duplicate_of 기록)

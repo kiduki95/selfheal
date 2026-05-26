@@ -1,6 +1,6 @@
-import type { Db } from '../db/db.js';
-import type { Inferences } from '../contracts/processed-review.js';
-import { thresholds } from '../config.js';
+import type { Db } from '../../db/db.js';
+import type { Inferences } from '../../contracts/processed-review.js';
+import { thresholds } from '../../config.js';
 
 // 4.8b aggregateSignal — Phase 2, cross-review, stateful. "inline은 멍청하게, 똑똑함은 비동기로".
 // inline: 보수적·provisional 배정만. merge/split/representative 재선정은 reconciliation(별도, stub).

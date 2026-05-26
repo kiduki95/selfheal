@@ -1,5 +1,5 @@
-import type { LlmClient, ClassifyInput, ClassifyOutput } from '../clients/llm/types.js';
-import { thresholds } from '../config.js';
+import type { LlmClient, ClassifyInput, ClassifyOutput } from '../../clients/llm/types.js';
+import { thresholds } from '../../config.js';
 
 // 4.6 classifyExtractModerate — 단일 LLM 호출(+graduated escalation). 비-confidence 트리거로
 // 사람 큐로 보낼지 판단하는 플래그도 계산 (spec §4.6).
