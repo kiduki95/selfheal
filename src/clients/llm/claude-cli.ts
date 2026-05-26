@@ -15,6 +15,8 @@ import type {
   EnumerateSubFeaturesOutput,
   ProposeGapInput,
   ProposeGapOutput,
+  ClusterGapsInput,
+  ClusterGapsOutput,
 } from './types.js';
 import { thresholds } from '../../config.js';
 
@@ -245,6 +247,27 @@ ONLY JSON: {"placement":"existing_module"|"new_module","module":"<위 목록의 
       };
     } catch {
       return { placement: 'new_module', module: '?', connection: '', title: `[feature] ${input.gap}`, body: input.gapDescription };
+    }
+  }
+
+  // gap 클러스터링 — 같은 의도(미구현 기능) 요청끼리 묶음.
+  async clusterGaps(input: ClusterGapsInput): Promise<ClusterGapsOutput> {
+    const list = input.gaps.map((g, i) => `${i + 1}. ${g.label} — "${(g.sample ?? '').slice(0, 60)}"`).join('\n');
+    const prompt = `다음은 사용자들이 요청한 미구현 기능(gap) 목록이다. **같은 기능을 다른 표현으로 요청한 것끼리** 묶어라.
+${list}
+
+ONLY JSON: {"clusters":[{"canonical_label":"<대표 기능명(한국어)>","members":[<번호>, ...]}]}
+- 서로 다른 기능은 각각 단독 클러스터. 확실히 같은 의도일 때만 묶는다.`;
+    const r = await runClaude(prompt, 'sonnet');
+    try {
+      const o = extractJson(r.result);
+      const clusters = (Array.isArray(o.clusters) ? o.clusters : []).map((c: any) => ({
+        canonical_label: String(c.canonical_label ?? ''),
+        member_ids: (Array.isArray(c.members) ? c.members : []).map((n: number) => input.gaps[n - 1]?.id).filter(Boolean),
+      })).filter((c: any) => c.member_ids.length);
+      return { clusters: clusters.length ? clusters : input.gaps.map((g) => ({ canonical_label: g.label, member_ids: [g.id] })) };
+    } catch {
+      return { clusters: input.gaps.map((g) => ({ canonical_label: g.label, member_ids: [g.id] })) };
     }
   }
 }

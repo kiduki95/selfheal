@@ -137,6 +137,14 @@ export interface ProposeGapOutput {
   body: string; // GitHub issue 본문(markdown)
 }
 
+// Insight: 파편화된 gap(미구현 요청)을 같은 의도끼리 클러스터링 (중복 issue 방지).
+export interface ClusterGapsInput {
+  gaps: { id: string; label: string; sample: string }[];
+}
+export interface ClusterGapsOutput {
+  clusters: { canonical_label: string; member_ids: string[] }[];
+}
+
 export interface LlmClient {
   readonly kind: 'stub' | 'anthropic';
   translate(input: TranslateInput): Promise<TranslateOutput>;
@@ -146,6 +154,7 @@ export interface LlmClient {
   describeFeature(input: DescribeFeatureInput): Promise<DescribeFeatureOutput>;
   enumerateSubFeatures(input: EnumerateSubFeaturesInput): Promise<EnumerateSubFeaturesOutput>;
   proposeGapPlacement(input: ProposeGapInput): Promise<ProposeGapOutput>;
+  clusterGaps(input: ClusterGapsInput): Promise<ClusterGapsOutput>;
 }
 
 // 미사용 import 경고 회피용 re-export

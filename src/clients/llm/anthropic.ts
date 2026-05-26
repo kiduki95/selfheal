@@ -14,6 +14,8 @@ import type {
   EnumerateSubFeaturesOutput,
   ProposeGapInput,
   ProposeGapOutput,
+  ClusterGapsInput,
+  ClusterGapsOutput,
 } from './types.js';
 import { thresholds } from '../../config.js';
 
@@ -222,6 +224,24 @@ export class AnthropicLlmClient implements LlmClient {
       module: String(o.module ?? '?'), connection: String(o.connection ?? ''),
       title: String(o.title ?? `[feature] ${input.gap}`), body: String(o.body ?? input.gapDescription),
     };
+  }
+
+  async clusterGaps(input: ClusterGapsInput): Promise<ClusterGapsOutput> {
+    const list = input.gaps.map((g, i) => `${i + 1}. ${g.label} — ${(g.sample ?? '').slice(0, 60)}`).join('\n');
+    const { json } = await this.call({
+      model: MODELS.classify, max_tokens: 512,
+      system: [{ type: 'text', text: 'Cluster same-intent missing-feature requests. ONLY JSON {"clusters":[{"canonical_label":string,"members":[int]}]}.', cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: list }],
+    });
+    const text = (json.content ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
+    const m = text.match(/\{[\s\S]*\}/);
+    try {
+      const o = m ? JSON.parse(m[0]) : { clusters: [] };
+      const clusters = (o.clusters ?? []).map((c: any) => ({ canonical_label: String(c.canonical_label ?? ''), member_ids: (c.members ?? []).map((n: number) => input.gaps[n - 1]?.id).filter(Boolean) })).filter((c: any) => c.member_ids.length);
+      return { clusters: clusters.length ? clusters : input.gaps.map((g) => ({ canonical_label: g.label, member_ids: [g.id] })) };
+    } catch {
+      return { clusters: input.gaps.map((g) => ({ canonical_label: g.label, member_ids: [g.id] })) };
+    }
   }
 
   async prefilterEscalation(text: string): Promise<PrefilterEscalationOutput> {

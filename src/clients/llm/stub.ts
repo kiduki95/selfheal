@@ -14,6 +14,8 @@ import type {
   EnumerateSubFeaturesOutput,
   ProposeGapInput,
   ProposeGapOutput,
+  ClusterGapsInput,
+  ClusterGapsOutput,
 } from './types.js';
 import type { Category } from '../../contracts/processed-review.js';
 
@@ -267,6 +269,11 @@ export class StubLlmClient implements LlmClient {
       title: `[feature] ${input.gap} 지원`,
       body: `## 요청 기능\n${input.gap} — ${input.gapDescription}\n\n## 제안 배치\n- ${existing ? `기존 모듈 \`${module}\`에 추가` : `신규 모듈 \`${module}\` 필요`}\n`,
     };
+  }
+
+  // gap 클러스터링 stub — 병합 안 함(각자 클러스터). 진짜 의미 묶음은 claude-cli.
+  async clusterGaps(input: ClusterGapsInput): Promise<ClusterGapsOutput> {
+    return { clusters: input.gaps.map((g) => ({ canonical_label: g.label, member_ids: [g.id] })) };
   }
 }
 

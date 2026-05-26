@@ -138,4 +138,17 @@ export const CORPUS: RawReview[] = [
     rating: 2, locale: 'ko-KR', app_version: '2.4.1', platform: 'web',
     created_at: '2026-05-20T03:00:00Z', ingested_at: '2026-05-20T04:00:00Z', raw_payload: {},
   }, // PII (settings/API key) — redaction
+
+  // --- GAP 중복(다른 표현): 백테스팅 재요청 → rd-102와 같은 의도 (클러스터링 대상) ---
+  {
+    source: 'app_store', source_id: 'as-109', text: '전략을 과거 데이터로 미리 돌려보고 싶어요. 시뮬레이션으로 수익률 검증하는 기능이 없나요?',
+    rating: 4, locale: 'ko-KR', app_version: '2.4.1', platform: 'web',
+    created_at: '2026-05-18T15:00:00Z', ingested_at: '2026-05-18T16:00:00Z', raw_payload: {},
+  }, // gap feature_request (backtesting, 다른 표현) — clusters with rd-102
+  // --- GAP 중복(다른 표현): 코인 재요청 → as-105와 같은 의도 (클러스터링 대상) ---
+  {
+    source: 'play_store', source_id: 'ps-108', text: '비트코인이나 이더리움 자동매매도 됐으면 좋겠어요. 코인 마켓도 지원해주세요.',
+    rating: 4, locale: 'ko-KR', app_version: '2.4.1', platform: 'android',
+    created_at: '2026-05-18T17:00:00Z', ingested_at: '2026-05-18T18:00:00Z', raw_payload: {},
+  }, // gap feature_request (crypto, 다른 표현) — clusters with as-105
 ];

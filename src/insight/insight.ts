@@ -62,7 +62,18 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
     out.push({ kind: 'bug_fix', title, priority, target_module: g.module_path ?? null, placement: null, body });
   }
 
-  // 2) gap 제안 (미구현 요청) — Claude가 모듈 배치/연결 제안
+  // 2) gap 클러스터링 — 같은 의도(다른 표현) 요청을 묶어 중복 issue 방지
+  const rawGaps = await db.gapFeaturesRaw(repo);
+  if (rawGaps.length > 1) {
+    const { clusters } = await llm.clusterGaps({ gaps: rawGaps });
+    for (const c of clusters) {
+      if (c.member_ids.length <= 1) continue;
+      const [canon, ...rest] = c.member_ids;
+      await db.mergeGapFeatures(canon!, rest, c.canonical_label);
+    }
+  }
+
+  // 3) gap 제안 (미구현 요청, 클러스터 단위) — Claude가 모듈 배치/연결 제안 + 코드그래프 검증
   for (const gap of await db.gapFeatures2(repo)) {
     const demand = Number(gap.demand);
     const desc = (gap.samples ?? []).filter(Boolean).slice(0, 2).join(' / ');

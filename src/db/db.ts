@@ -369,12 +369,30 @@ export class Db {
        ORDER BY g.corroboration_count DESC`,
     );
   }
+  // 클러스터링 입력 — 아직 안 묶인 gap 전부 (id/label/대표 샘플)
+  async gapFeaturesRaw(repo: string): Promise<{ id: string; label: string; sample: string }[]> {
+    return this.query(
+      `SELECT f.id, f.pref_label AS label,
+        COALESCE((SELECT pr.facts->>'text_redacted' FROM processed_reviews pr WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') = f.id::text LIMIT 1), f.pref_label) AS sample
+       FROM feature_registry f WHERE f.status='gap' AND f.repo=$1 AND f.merged_into IS NULL`,
+      [repo],
+    );
+  }
+  // gap 클러스터 병합 — rest를 canon으로 merged_into, canon 라벨을 대표명으로.
+  async mergeGapFeatures(canonId: string, restIds: string[], label: string): Promise<void> {
+    if (restIds.length) await this.query(`UPDATE feature_registry SET merged_into = $1 WHERE id = ANY($2::uuid[])`, [canonId, restIds]);
+    await this.query(`UPDATE feature_registry SET pref_label = $2 WHERE id = $1`, [canonId, label]);
+  }
+  // canonical gap만 + demand/samples를 클러스터(canon + merged 멤버) 전체에서 합산
   async gapFeatures2(repo: string): Promise<any[]> {
     return this.query(
       `SELECT f.id, f.pref_label,
-        (SELECT count(*) FROM processed_reviews pr WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') = f.id::text) AS demand,
-        (SELECT array_agg(t) FROM (SELECT pr.facts->>'text_redacted' AS t FROM processed_reviews pr WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') = f.id::text LIMIT 3) s) AS samples
-       FROM feature_registry f WHERE f.status = 'gap' AND f.repo = $1 ORDER BY demand DESC`,
+        (SELECT count(*) FROM processed_reviews pr WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid IN
+           (SELECT f.id UNION SELECT mm.id FROM feature_registry mm WHERE mm.merged_into = f.id)) AS demand,
+        (SELECT array_agg(t) FROM (SELECT pr.facts->>'text_redacted' AS t FROM processed_reviews pr
+           WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid IN
+             (SELECT f.id UNION SELECT mm.id FROM feature_registry mm WHERE mm.merged_into = f.id) LIMIT 3) s) AS samples
+       FROM feature_registry f WHERE f.status='gap' AND f.repo=$1 AND f.merged_into IS NULL ORDER BY demand DESC`,
       [repo],
     );
   }
