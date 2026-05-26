@@ -2,7 +2,7 @@
 
 > 버전: v0.1 (draft, **논의용 — 동결 아님**) · 대상 독자: 전 레이어 개발자 + UI
 >
-> 이 문서는 **우산(umbrella) 문서**다. 각 레이어의 상세 스펙은 별도 문서가 가진다([processing-layer.md](./processing-layer.md), [codeflow-layer.md](./codeflow-layer.md)). 여기서는 (1) 레이어가 어떻게 맞물리는지, (2) 공유 데이터 모델, (3) **UI ↔ 백엔드 컨트랙트**, (4) 디렉터리 구조와 빌드/배선 순서를 정의한다.
+> 이 문서는 **우산(umbrella) 문서**다. 각 레이어의 상세 스펙은 별도 문서가 가진다([processing-layer.md](./processing-layer.md), [codeflow-layer.md](./codeflow-layer.md)). **UI 화면별 기능 인벤토리와 실시간성 판단**은 [ui-feature-matrix.md](./ui-feature-matrix.md)에 있다. 여기서는 (1) 레이어가 어떻게 맞물리는지, (2) 공유 데이터 모델, (3) **UI ↔ 백엔드 컨트랙트**, (4) 디렉터리 구조와 빌드/배선 순서를 정의한다.
 >
 > **한 줄 정의**: selfheal은 앱스토어/커뮤니티 리뷰를 먹어, 대상 제품의 **코드 지도 위에 신호를 얹고**, 임팩트 높은 이슈에 대해 **PR 초안까지 자동 생성**하는 self-improving 루프다. 출력은 사람이 읽는 대시보드가 아니라 **에이전트가 먹는 신호** — 단, 사람은 UI로 *승인/거절*에서 루프에 개입한다(HITL).
 
