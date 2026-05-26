@@ -68,6 +68,7 @@ export function verifyGapProposal(plan: { placement: string; module: string; con
 
 export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<ProposalView[]> {
   await db.clearProposals(repo);
+  await db.recomputeTrends(new Date()); // #4: refresh new/rising/stable/declining from report recency
   const out: ProposalView[] = [];
   // 모듈→기능 맵 + 실제 import 의존성(code_edges) 주입 → grounding 근거
   const impMap = new Map((await db.moduleImports(repo)).map((i) => [i.module, i.imports]));

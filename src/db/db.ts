@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { config } from '../config.js';
 import { toSqlVector } from '../util/vector.js';
+import { deriveTrend } from '../util/trend.js';
 import type { Inferences, ProcessedReview } from '../contracts/processed-review.js';
 
 const { Pool } = pg;
@@ -319,6 +320,19 @@ export class Db {
     await this.query(`INSERT INTO signal_group_events (signal_group_id, event_type, payload, actor) VALUES ($1,$2,$3,$4)`, [groupId, eventType, JSON.stringify(payload ?? {}), actor]);
   }
 
+  // Recompute trend for all open groups from member report times vs wall-clock now (#4).
+  // This is what makes 'stable'/'declining' reachable — the inline pass only sets provisional new/rising.
+  async recomputeTrends(now: Date): Promise<void> {
+    const groups = await this.query<{ id: string; times: (string | null)[] }>(
+      `SELECT g.id, array_agg(pr.facts->>'created_at') AS times
+       FROM signal_groups g JOIN processed_reviews pr ON pr.signal_group_id = g.id
+       WHERE g.status = 'open' GROUP BY g.id`,
+    );
+    for (const g of groups) {
+      const times = (g.times ?? []).filter((s): s is string => !!s).map((s) => Date.parse(s)).filter((n) => Number.isFinite(n));
+      await this.query(`UPDATE signal_groups SET trend = $2 WHERE id = $1`, [g.id, deriveTrend(times, now.getTime())]);
+    }
+  }
   async recordResolution(groupId: string, prId: string, appVersion: string | null): Promise<void> {
     await this.query(`INSERT INTO resolution_signals (signal_group_id, processed_review_id, app_version) VALUES ($1,$2,$3)`, [groupId, prId, appVersion]);
     await this.query(`UPDATE signal_groups SET resolution_count = resolution_count + 1 WHERE id = $1`, [groupId]);
