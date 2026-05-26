@@ -6,6 +6,10 @@ import type {
   ClassifyOutput,
   PrefilterEscalationOutput,
   LlmUsage,
+  MapFeatureInput,
+  MapFeatureOutput,
+  DescribeFeatureInput,
+  DescribeFeatureOutput,
 } from './types.js';
 import type { Category } from '../../contracts/processed-review.js';
 
@@ -209,6 +213,53 @@ export class StubLlmClient implements LlmClient {
   async prefilterEscalation(text: string): Promise<PrefilterEscalationOutput> {
     return { is_spam: gibberishRatio(text) > 0.7, usage: usage('stub/haiku-4.5', text.length, 5) };
   }
+
+  // P1 feature mapper (규칙 기반). 사용자어(KO)를 코드 심볼/모듈 힌트(EN)로 확장해 후보와 매칭.
+  // 진짜 판단은 claude-cli가 하고, 이건 무과금 fallback/테스트용.
+  async mapFeature(input: MapFeatureInput): Promise<MapFeatureOutput> {
+    const hay = `${input.text} ${input.affected_area ?? ''}`.toLowerCase();
+    const hints = expandHints(hay); // KO→EN 힌트 토큰 집합
+    let best: { id: string; score: number } | null = null;
+    for (const c of input.candidates) {
+      const desc = `${c.label} ${c.description}`.toLowerCase();
+      let score = 0;
+      for (const h of hints) if (desc.includes(h)) score++;
+      if (!best || score > best.score) best = { id: c.feature_id, score };
+    }
+    const bugword = /(안\s*떠|안\s*돼|안돼|튕|강제종료|멈춤|크래시|crash|error|에러|오류|freeze|버벅|느려|죽)/.test(hay);
+    if (best && best.score >= 1) {
+      const state = bugword || input.category === 'bug' ? 'defective' : 'grounded';
+      return { state, feature_id: best.id, confidence: Math.min(0.9, 0.5 + best.score * 0.15), reason: `stub keyword overlap=${best.score}` };
+    }
+    return { state: 'gap', feature_id: null, confidence: 0.6, reason: 'stub: no candidate feature matched' };
+  }
+
+  // ② 설명 보강 stub — enrich 안 함(심볼명 그대로). 진짜 사용자어 라벨은 claude-cli.
+  async describeFeature(input: DescribeFeatureInput): Promise<DescribeFeatureOutput> {
+    return { label: input.symbol, description: `${input.module} · ${input.signature}`.slice(0, 160) };
+  }
+}
+
+// KO 사용자어 → 코드 심볼/모듈 힌트(EN) 확장 (stub 전용)
+const HINT_MAP: { ko: RegExp; en: string[] }[] = [
+  { ko: /차트|그래프|캔들/, en: ['chart', 'graph', 'stockgraph'] },
+  { ko: /주문|매수|매도|체결|수량/, en: ['order', 'trade', 'stocktrade', 'buy', 'sell'] },
+  { ko: /자동\s*매(수|도)|자동매매/, en: ['trade', 'stocktrade', 'auto'] },
+  { ko: /로그인|로그아웃|비밀번호|이메일/, en: ['login'] },
+  { ko: /계좌/, en: ['account'] },
+  { ko: /거래\s*내역|수익률|실현손익/, en: ['history', 'tradehistory'] },
+  { ko: /잔고|보유|평가/, en: ['account', 'holdings', 'balance'] },
+  { ko: /설정|api|키움|키 ?값/, en: ['settings'] },
+  { ko: /종목\s*검색|종목/, en: ['search', 'stocksearch', 'stock'] },
+  { ko: /rsi|macd|골든크로스|지표/, en: ['indicator', 'investment', 'stockinvestment', 'rsi', 'macd'] },
+  { ko: /헤더|다크\s*모드|테마|메뉴/, en: ['header', 'theme'] },
+  { ko: /뉴스/, en: ['news', 'stocknews'] },
+];
+function expandHints(hay: string): Set<string> {
+  const out = new Set<string>();
+  for (const w of hay.split(/[^a-z가-힣0-9]+/)) if (w.length >= 2) out.add(w);
+  for (const { ko, en } of HINT_MAP) if (ko.test(hay)) en.forEach((e) => out.add(e));
+  return out;
 }
 
 function round2(n: number): number {

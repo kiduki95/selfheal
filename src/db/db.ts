@@ -149,11 +149,19 @@ export class Db {
       [toSqlVector(vector)],
     );
   }
+  // feature → 코드 앵커. 모듈 노드(대표)를 우선 반환 → grounding을 모듈 1개로 깔끔하게.
+  // 모듈 노드가 없으면(구버전 데이터) 파일 노드로 degrade.
   async codeMatchByFeatures(featureIds: string[]): Promise<CodeMatch[]> {
     if (featureIds.length === 0) return [];
-    return this.query<CodeMatch>(
+    const mods = await this.query<CodeMatch>(
       `SELECT id, 1.0 AS cosine, owners, 'feature_link' AS via FROM code_artifact_registry
-       WHERE is_active AND feature_ids && $1::uuid[]`,
+       WHERE is_active AND kind = 'module' AND feature_ids && $1::uuid[]`,
+      [featureIds],
+    );
+    if (mods.length) return mods;
+    return this.query<CodeMatch>(
+      `SELECT DISTINCT ON (path) id, 1.0 AS cosine, owners, 'feature_link' AS via FROM code_artifact_registry
+       WHERE is_active AND kind = 'file' AND feature_ids && $1::uuid[] ORDER BY path LIMIT 6`,
       [featureIds],
     );
   }
@@ -164,6 +172,35 @@ export class Db {
        ORDER BY embedding <=> $1::vector ASC LIMIT 3`,
       [toSqlVector(vector)],
     );
+  }
+
+  // --- P1: feature mapping (Claude-as-judge) ---
+  // 타깃 repo의 grounded feature 후보 전체 (소규모 codebase는 임베딩 추림 없이 전부 LLM에).
+  async featureCandidates(targetRepo: string, limit = 60): Promise<{ feature_id: string; label: string; description: string }[]> {
+    // leaf(컴포넌트, parent_id NOT NULL) feature 우선 — grounding이 파일 단위로 내려감.
+    const leaves = await this.query<{ feature_id: string; label: string; description: string }>(
+      `SELECT id AS feature_id, pref_label AS label, COALESCE(description,'') AS description
+       FROM feature_registry WHERE status='grounded' AND repo=$1 AND parent_id IS NOT NULL ORDER BY pref_label LIMIT $2`,
+      [targetRepo, limit],
+    );
+    if (leaves.length) return leaves;
+    // 컴포넌트 feature가 없으면 모듈 단위로 degrade
+    return this.query<{ feature_id: string; label: string; description: string }>(
+      `SELECT id AS feature_id, pref_label AS label, COALESCE(description,'') AS description
+       FROM feature_registry WHERE status='grounded' AND repo=$1 ORDER BY pref_label LIMIT $2`,
+      [targetRepo, limit],
+    );
+  }
+  // gap = review-emergent floating feature. 후속 클러스터/promote는 P2.
+  async upsertEmergentFeature(label: string, normalized: string, targetRepo: string): Promise<string> {
+    const rows = await this.query<{ id: string }>(
+      `INSERT INTO feature_registry (canonical_slug, pref_label, origin, status, repo)
+       VALUES ($1,$2,'review_emergent','gap',$3)
+       ON CONFLICT (canonical_slug) DO UPDATE SET pref_label = EXCLUDED.pref_label
+       RETURNING id`,
+      [`gap:${targetRepo}:${normalized}`.slice(0, 200), label, targetRepo],
+    );
+    return rows[0]!.id;
   }
 
   // --- unmatched feature candidates ---

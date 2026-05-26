@@ -22,6 +22,7 @@ async function main() {
   await db.query('DELETE FROM review_stage_outputs');
   await db.query('DELETE FROM processed_reviews');
   await db.query('DELETE FROM unmatched_feature_candidates');
+  await db.query(`DELETE FROM feature_registry WHERE status='gap'`); // review-emergent gap — 이번 런 기준 재생성
   await db.query('DELETE FROM raw_reviews');
 
   console.log(`\n=== Ouroboros Processing Layer — Phase 1 ===`);
@@ -36,6 +37,7 @@ async function main() {
 
   printFunnel(outcomes);
   await printDetails(outcomes, db);
+  await printFeatureMapping(outcomes, db);
   await printSignalGroups(db);
   await printMetrics(metrics, db);
   await printHumanQueue(db);
@@ -49,8 +51,10 @@ async function printMetrics(m: InMemoryMetrics, db: Db) {
 
   // Cost / cache health
   const tin = m.getCounter('cost.tokens_in');
-  console.log(`\n[cost/cache] tokens_in=${tin} out=${m.getCounter('cost.tokens_out')} cached=${m.getCounter('cost.cached_tokens')}`);
-  console.log(`  prompt_hit_rate=${tin ? m.ratio('cost.cached_tokens', 'cost.tokens_in') : 0}  semantic_hit_rate=${m.ratio('cache.semantic_hit', 'funnel.classified')}`);
+  const cached = m.getCounter('cost.cached_tokens');
+  const promptHit = tin + cached > 0 ? Math.round((cached / (tin + cached)) * 1000) / 1000 : 0;
+  console.log(`\n[cost/cache] tokens_in=${tin} out=${m.getCounter('cost.tokens_out')} cached=${cached}`);
+  console.log(`  prompt_hit_rate=${promptHit}  semantic_hit_rate=${m.ratio('cache.semantic_hit', 'funnel.classified')}`);
 
   // Confidence health
   const cc = m.percentiles('confidence.classifier');
@@ -69,9 +73,12 @@ async function printMetrics(m: InMemoryMetrics, db: Db) {
   console.log(`  new_group_rate=${m.ratio('signal.new_group', 'signal.assigned')} mean_corroboration=${corr.mean} (assigned=${m.getCounter('signal.assigned')})`);
 
   // Vocabulary growth
-  const regSize = await db.scalar(`SELECT count(*)::text AS n FROM feature_registry WHERE is_active`);
-  const unm = await db.scalar(`SELECT count(*)::text AS n FROM unmatched_feature_candidates`);
-  console.log(`\n[vocab] registry_size=${regSize} unmatched_candidates=${unm} match_rate=${m.ratio('feature.matched', 'feature.mentions')}`);
+  const regSize = await db.scalar(`SELECT count(*)::text AS n FROM feature_registry WHERE repo=$1 AND status='grounded'`, [config.targetRepo]);
+  // match_rate = 기존 기능에 매핑된 비율 (grounded+defective) / 매핑 시도 (grounded+defective+gap)
+  const grd = m.getCounter('feature.grounded') + m.getCounter('feature.defective');
+  const mapped = grd + m.getCounter('feature.gap');
+  const matchRate = mapped > 0 ? Math.round((grd / mapped) * 1000) / 1000 : 0;
+  console.log(`\n[vocab] grounded_features=${regSize} gap_rate=${m.ratio('feature.gap', 'feature.mentions')} match_rate=${matchRate} (grounded+defective=${grd}/${mapped})`);
 
   // PII compliance
   console.log(`\n[pii] reviews_with_pii=${m.getCounter('pii.reviews_with_pii')} by_type=${JSON.stringify(m.getDist('pii.type'))}`);
@@ -89,6 +96,26 @@ async function printMetrics(m: InMemoryMetrics, db: Db) {
     }
   }
   await db.saveMetricSnapshot(`${config.llmClient}/${config.embeddingClient}`, dists);
+}
+
+async function printFeatureMapping(outcomes: ProcessOutcome[], db: Db) {
+  console.log(`\n--- P1: review → feature 매핑 (Claude-as-judge, target=${config.targetRepo}) ---`);
+  const states: Record<string, number> = { grounded: 0, defective: 0, gap: 0 };
+  const grounded: string[] = [];
+  for (const o of outcomes) {
+    const fm = o.processed_review?.inferences.extraction.feature_mapping;
+    if (!fm) continue;
+    states[fm.state] = (states[fm.state] ?? 0) + 1;
+    if (fm.state !== 'gap' && fm.feature_id) {
+      const f = await db.query<{ pref_label: string }>(`SELECT pref_label FROM feature_registry WHERE id=$1`, [fm.feature_id]);
+      grounded.push(`${o.source_id}→${f[0]?.pref_label}(${fm.state})`);
+    }
+  }
+  console.log(`  states: grounded=${states.grounded} defective=${states.defective} gap=${states.gap}`);
+  console.log(`  매핑 예시: ${grounded.slice(0, 8).join(', ')}`);
+  // floating gaps — Insight가 "어느 모듈에 추가할지" 제안할 대상
+  const gaps = await db.query<{ pref_label: string }>(`SELECT pref_label FROM feature_registry WHERE status='gap' AND repo=$1 ORDER BY pref_label`, [config.targetRepo]);
+  console.log(`  🟡 floating gaps (미구현 요청, ${gaps.length}): ${gaps.map((g) => `"${g.pref_label}"`).join(', ')}`);
 }
 
 async function printSignalGroups(db: Db) {
@@ -118,7 +145,9 @@ function line(o: ProcessOutcome): string {
     o.status === 'duplicate' ? `♻  DUP (${o.reason})` :
     o.status === 'cache_hit' ? `⚡ CACHE-HIT (cos=${o.cache_cosine?.toFixed(3)})` :
     `✔  ${cat?.category}/${cat?.severity} conf=${cat?.category_confidence}`;
+  const fmap = o.processed_review?.inferences.extraction.feature_mapping;
   const extra = [
+    fmap ? `feat=${fmap.state}` : '',
     o.near_duplicates?.length ? `near=${o.near_duplicates.length}` : '',
     o.low_confidence ? 'low-conf' : '',
     o.signal ? `signal=${o.signal.created_group ? 'NEW' : o.signal.matched_by}#${o.signal.corroboration}` : '',

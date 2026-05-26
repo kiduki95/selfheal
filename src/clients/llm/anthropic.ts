@@ -6,6 +6,10 @@ import type {
   ClassifyOutput,
   PrefilterEscalationOutput,
   LlmUsage,
+  MapFeatureInput,
+  MapFeatureOutput,
+  DescribeFeatureInput,
+  DescribeFeatureOutput,
 } from './types.js';
 import { thresholds } from '../../config.js';
 
@@ -147,6 +151,37 @@ export class AnthropicLlmClient implements LlmClient {
       usage,
       escalated,
     };
+  }
+
+  async mapFeature(input: MapFeatureInput): Promise<MapFeatureOutput> {
+    if (input.candidates.length === 0) return { state: 'gap', feature_id: null, confidence: 0.5, reason: 'no candidate features' };
+    const list = input.candidates.map((c, i) => `${i + 1}. ${c.label} — ${c.description}`).join('\n');
+    const { json, usage } = await this.call({
+      model: MODELS.classify,
+      max_tokens: 256,
+      system: [{ type: 'text', text: 'Map the review to one existing feature, or 0 if it requests a missing capability. Output ONLY JSON {"feature":int,"state":"grounded|defective|gap","confidence":number,"reason":string}.', cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: `Features:\n${list}\n\nReview (category=${input.category}):\n${input.text}${input.affected_area ? `\nAffected: ${input.affected_area}` : ''}` }],
+    });
+    const text = (json.content ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
+    const m = text.match(/\{[\s\S]*\}/);
+    const o = m ? JSON.parse(m[0]) : { feature: 0, state: 'gap', confidence: 0.5, reason: 'parse fail' };
+    const n = Number(o.feature ?? 0);
+    const state = o.state === 'defective' || o.state === 'gap' ? o.state : 'grounded';
+    const feature_id = state !== 'gap' && n >= 1 && n <= input.candidates.length ? input.candidates[n - 1]!.feature_id : null;
+    return { state: feature_id ? state : 'gap', feature_id, confidence: o.confidence ?? 0.7, reason: o.reason ?? '', usage };
+  }
+
+  async describeFeature(input: DescribeFeatureInput): Promise<DescribeFeatureOutput> {
+    const { json } = await this.call({
+      model: MODELS.translate,
+      max_tokens: 200,
+      system: [{ type: 'text', text: 'Given a code component, output ONLY JSON {"label":"<Korean user-facing feature name>","description":"<one line>"}.', cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: `Symbol: ${input.symbol}\nModule: ${input.module}\nSignature: ${input.signature}` }],
+    });
+    const text = (json.content ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
+    const m = text.match(/\{[\s\S]*\}/);
+    const o = m ? JSON.parse(m[0]) : { label: input.symbol, description: input.module };
+    return { label: o.label || input.symbol, description: o.description || '' };
   }
 
   async prefilterEscalation(text: string): Promise<PrefilterEscalationOutput> {

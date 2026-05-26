@@ -71,11 +71,48 @@ export interface PrefilterEscalationOutput {
   usage: LlmUsage;
 }
 
+// P1: feature mapper (Claude-as-judge). 임베더가 후보를 추리고, LLM이 최종 판단.
+//   grounded  = 기존 기능에 매핑
+//   defective = 기존 기능인데 "고장/안 됨"을 보고 (여전히 매핑되지만 상태 구분)
+//   gap       = 후보 중 진짜 매칭 없음 = 미구현/요청 기능 (floating)
+export type FeatureState = 'grounded' | 'defective' | 'gap';
+export interface FeatureCandidate {
+  feature_id: string;
+  label: string;
+  description: string;
+}
+export interface MapFeatureInput {
+  text: string; // text_en ?? text_redacted
+  affected_area: string | null;
+  category: string;
+  candidates: FeatureCandidate[];
+}
+export interface MapFeatureOutput {
+  state: FeatureState;
+  feature_id: string | null; // grounded/defective → 매칭 후보 id, gap → null
+  confidence: number;
+  reason: string;
+  usage?: LlmUsage;
+}
+
+// ② graphify 기능 설명 보강 (스캔당 1회) — 코드 심볼 → 사용자어 라벨/설명.
+export interface DescribeFeatureInput {
+  symbol: string;
+  module: string;
+  signature: string;
+}
+export interface DescribeFeatureOutput {
+  label: string; // 사용자어 기능명 (예: "실시간 차트")
+  description: string;
+}
+
 export interface LlmClient {
   readonly kind: 'stub' | 'anthropic';
   translate(input: TranslateInput): Promise<TranslateOutput>;
   classifyExtractModerate(input: ClassifyInput): Promise<ClassifyOutput>;
   prefilterEscalation(text: string): Promise<PrefilterEscalationOutput>;
+  mapFeature(input: MapFeatureInput): Promise<MapFeatureOutput>;
+  describeFeature(input: DescribeFeatureInput): Promise<DescribeFeatureOutput>;
 }
 
 // 미사용 import 경고 회피용 re-export

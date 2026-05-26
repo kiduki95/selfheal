@@ -116,6 +116,23 @@ describe('drift PSI (§8)', () => {
   });
 });
 
+describe('feature mapper (stub, P1)', () => {
+  const cands = [
+    { feature_id: 'f-chart', label: 'components/dashboard', description: 'StockGraph, StockSearch, StockTrade' },
+    { feature_id: 'f-hist', label: 'app/history', description: 'TradeHistory' },
+  ];
+  it('차트 버그 → defective + 매칭', async () => {
+    const o = await llm.mapFeature({ text: '실시간 차트가 안 떠요 멈춤', affected_area: '차트', category: 'bug', candidates: cands });
+    expect(o.feature_id).toBe('f-chart');
+    expect(o.state).toBe('defective');
+  });
+  it('후보에 없는 요청 → gap', async () => {
+    const o = await llm.mapFeature({ text: '백테스팅 기능 추가해주세요', affected_area: null, category: 'feature_request', candidates: cands });
+    expect(o.state).toBe('gap');
+    expect(o.feature_id).toBeNull();
+  });
+});
+
 describe('local embedder', () => {
   it('동일 텍스트 cosine=1, 무관 텍스트 낮음', async () => {
     const e = new LocalEmbeddingClient();

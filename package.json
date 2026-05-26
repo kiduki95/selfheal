@@ -13,7 +13,9 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:reset": "docker compose down -v && docker compose up -d && wait-on tcp:5433 && tsx scripts/migrate.ts",
     "seed": "tsx scripts/seed-registries.ts",
+    "graphify:scan": "tsx scripts/graphify-scan.ts",
     "run:corpus": "tsx scripts/run-corpus.ts",
+    "ui": "tsx scripts/ui-server.ts",
     "verify": "tsx scripts/migrate.ts && tsx scripts/seed-registries.ts && tsx scripts/run-corpus.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

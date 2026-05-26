@@ -46,9 +46,9 @@ async function main() {
   const db = new Db();
   const embedder = makeEmbeddingClient();
 
-  // 멱등 시드 — 기존 레지스트리 비우고 다시
-  await db.query('DELETE FROM code_artifact_registry');
-  await db.query('DELETE FROM feature_registry');
+  // 멱등 시드 — 이 시드의 범위만 비움 (graphify가 채운 code-derived 데이터는 보존).
+  await db.query(`DELETE FROM code_artifact_registry WHERE repo = 'org/app-ios'`);
+  await db.query(`DELETE FROM feature_registry WHERE origin = 'manual'`);
 
   const idBySlug = new Map<string, string>();
   for (const f of FEATURES) {

@@ -44,11 +44,20 @@ export const FeatureMatchSchema = z.object({
   status: z.enum(['auto_verified', 'pending_review', 'rejected']),
 });
 
+// P1: review→feature 매핑 3-state (grounded/defective/gap). gap이면 feature_id=floating emergent.
+export const FeatureMappingSchema = z.object({
+  state: z.enum(['grounded', 'defective', 'gap']),
+  feature_id: z.string().nullable(),
+  confidence: z.number(),
+  reason: z.string().nullable(),
+});
+
 export const ExtractionSchema = z.object({
   feature_ids: z.array(z.string()),
   feature_matches: z.array(FeatureMatchSchema),
   raw_feature_mentions: z.array(z.string()),
   entities: z.array(z.object({ type: z.string(), value: z.string() })),
+  feature_mapping: FeatureMappingSchema.nullable().default(null),
 });
 
 export const ModerationSchema = z.object({

@@ -7,6 +7,10 @@ import type {
   ClassifyOutput,
   PrefilterEscalationOutput,
   LlmUsage,
+  MapFeatureInput,
+  MapFeatureOutput,
+  DescribeFeatureInput,
+  DescribeFeatureOutput,
 } from './types.js';
 import { thresholds } from '../../config.js';
 
@@ -145,5 +149,48 @@ export class ClaudeCliLlmClient implements LlmClient {
   async prefilterEscalation(text: string): Promise<PrefilterEscalationOutput> {
     const r = await runClaude(`Is this app review spam? Reply ONLY "SPAM" or "OK".\n${text}`, 'haiku');
     return { is_spam: /SPAM/i.test(r.result), usage: r.usage };
+  }
+
+  // P1: Claude-as-judge feature mapping — 후보 전체를 주고 grounded/defective/gap 판단.
+  async mapFeature(input: MapFeatureInput): Promise<MapFeatureOutput> {
+    if (input.candidates.length === 0) return { state: 'gap', feature_id: null, confidence: 0.5, reason: 'no candidate features' };
+    const list = input.candidates.map((c, i) => `${i + 1}. ${c.label} — ${c.description}`).join('\n');
+    const prompt = `You map a user app review to the app's EXISTING features (derived from its codebase).
+Features:
+${list}
+
+Review (category=${input.category}):
+${input.text}${input.affected_area ? `\nAffected area: ${input.affected_area}` : ''}
+
+Pick the single feature this review is about. Respond with ONLY JSON (no prose):
+{"feature": <feature number, or 0 if NONE of the listed features provide this = a missing/new capability>, "state": "grounded"|"defective"|"gap", "confidence": 0..1, "reason": "<short>"}
+- "defective": refers to an existing listed feature but reports it broken/not working.
+- "grounded": refers to an existing listed feature (praise/question/normal use).
+- "gap": the review requests a capability NONE of the listed features cover (set feature=0).`;
+    const r = await runClaude(prompt, 'sonnet');
+    const o = extractJson(r.result);
+    const n = Number(o.feature ?? 0);
+    const state = o.state === 'defective' || o.state === 'gap' ? o.state : 'grounded';
+    const feature_id = state !== 'gap' && n >= 1 && n <= input.candidates.length ? input.candidates[n - 1]!.feature_id : null;
+    return { state: feature_id ? state : 'gap', feature_id, confidence: o.confidence ?? 0.7, reason: o.reason ?? '', usage: r.usage };
+  }
+
+  // ② 코드 심볼 → 사용자어 기능명/설명 (스캔당 1회). 영문 심볼명을 그대로 두지 말고 한국어로.
+  async describeFeature(input: DescribeFeatureInput): Promise<DescribeFeatureOutput> {
+    const prompt = `다음은 한 주식 자동매매 앱 코드베이스의 UI 컴포넌트/기능이다.
+Symbol: ${input.symbol}
+Module/Path: ${input.module}
+Signature: ${input.signature}
+
+이 컴포넌트가 사용자에게 제공하는 기능을, **사용자가 부를 법한 짧은 한국어 기능명**으로 지어라.
+영문 심볼명(예: StockGraph)을 그대로 두지 말고 반드시 한국어로 번역/의역하라 (예: StockGraph→"실시간 차트", StockTrade→"매수/매도 주문").
+ONLY JSON: {"label":"<짧은 한국어 기능명>","description":"<한 줄 설명>"}`;
+    const r = await runClaude(prompt, 'sonnet');
+    try {
+      const o = extractJson(r.result);
+      return { label: o.label || input.symbol, description: o.description || '' };
+    } catch {
+      return { label: input.symbol, description: input.module };
+    }
   }
 }

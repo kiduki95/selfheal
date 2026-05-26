@@ -24,6 +24,24 @@ npm test               # 순수 stage 단위 테스트 (DB 불필요)
 
 `npm run db:up` 후 한 번에: `npm run db:migrate && npm run seed && npm run run:corpus`.
 
+### Graphify (코드 그래프 producer, P0)
+
+대상 repo를 **TypeScript Compiler API**로 스캔해 `code_artifact_registry`(module/file/symbol)·`code_edges`
+(contains/imports)·**code-derived grounded features**를 채운다 — 결정론적, Claude 토큰 0, 증분(content_hash) 토대.
+`mapCodeArtifacts`가 매칭할 "실제 코드 지도"의 producer. selfheal 자체를 dogfooding:
+
+```bash
+npm run graphify:scan           # 현재 repo(src/) 스캔 → 모듈→기능 맵 출력
+npm run graphify:scan <repo> <rootDir>
+```
+
+목표 그림: 코드에서 **모듈→기능**을 먼저 정리 → 리뷰가 들어오면 기능에 매핑(grounded) / 없으면 floating(gap)
+→ Insight가 "어느 모듈에 어떻게 추가할지" 제안. 설계: `docs/graphify-layer.md`.
+
+스캐너는 `.ts`/`.tsx` + 다중 소스루트(app/components/lib/hooks 등)를 지원하며 모듈→기능 description에
+멤버 심볼명을 넣어 매핑 판단의 재료를 준다. 매핑 대상 codebase는 `TARGET_REPO`(기본
+`tete-lab/automated-trading-system`), feature는 `repo`로 스코프되어 여러 codebase가 공존.
+
 ### 파이프라인 (구현된 11 stage)
 
 ```
@@ -36,7 +54,9 @@ RawReview
   → semanticCache    (과거 고신뢰 분류 재사용 → classify skip)
   → classifyExtractModerate  (단일 호출 + graduated escalation + defect 추출)
   → extractFeatureIds        (exact alias → embedding 2-band)
-  → mapCodeArtifacts         (feature_link / semantic_match, provenance 포함)
+  → mapFeature (P1)          (Claude-as-judge: 타깃 codebase 기능에 매핑 → grounded/defective/gap.
+                              gap = 미구현 요청 → floating(emergent feature) + Insight 큐)
+  → mapCodeArtifacts         (grounded/defective feature → 모듈 코드 앵커)
   → persist          (processed_reviews + review_embeddings + stage_outputs, tx)
 
   [Phase 2: cross-review, stateful — persist 후]

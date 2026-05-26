@@ -16,8 +16,9 @@ import { translate } from '../stages/translate.js';
 import { dedup } from '../stages/dedup.js';
 import { semanticCache } from '../stages/semantic-cache.js';
 import { classifyExtractModerate } from '../stages/classify-extract-moderate.js';
-import { extractFeatureIds } from '../stages/extract-feature-ids.js';
+import { mapFeature } from '../stages/map-feature.js';
 import { mapCodeArtifacts } from '../stages/map-code-artifacts.js';
+import { config } from '../config.js';
 import { aggregateSignal, recordResolutionReport } from '../stages/aggregate-signal.js';
 import { canonicalizeErrorSignature } from '../util/error-signature.js';
 import { simhash64 } from '../util/simhash.js';
@@ -148,16 +149,24 @@ export async function processReview(raw: unknown, ctx: PipelineCtx): Promise<Pro
     if (cls.result.escalated) m.inc('classify.escalated');
     if (lowConf) m.inc('classify.low_confidence');
 
-    // 4.7 extractFeatureIds (stateful)
-    const feat = await extractFeatureIds(c.extraction.raw_feature_mentions, id, ctx.db, ctx.embedder);
+    // 4.7' mapFeature (P1, Claude-as-judge) — actionable 카테고리만. grounded/defective/gap.
+    let featureMapping: Inferences['extraction']['feature_mapping'] = null;
+    let featureIds: string[] = [];
+    const mapCats = ['bug', 'feature_request', 'complaint'].includes(c.classification.category);
     m.inc('feature.mentions', c.extraction.raw_feature_mentions.length);
-    m.inc('feature.matched', feat.feature_ids.length);
-    m.inc('feature.unmatched', feat.unmatched.length);
+    if (mapCats) {
+      featureMapping = await mapFeature(
+        { text: tr.text_en ?? pii.text_redacted, affected_area: c.defect?.affected_area ?? null, category: c.classification.category, mentions: c.extraction.raw_feature_mentions },
+        ctx.db, ctx.llm, config.targetRepo,
+      );
+      m.inc(`feature.${featureMapping.state}`);
+      if (featureMapping.state !== 'gap' && featureMapping.feature_id) featureIds = [featureMapping.feature_id];
+    }
 
-    // 4.7b mapCodeArtifacts (bug일 때만, stateful) + error_signature 정규화(canonical/family)
+    // 4.7b mapCodeArtifacts (bug + grounded/defective feature → 모듈 코드) + error_signature 정규화
     let defect: Inferences['defect'] = null;
     if (c.classification.category === 'bug' && c.defect) {
-      const code = await mapCodeArtifacts(feat.feature_ids, c.defect.affected_area, ctx.db, ctx.embedder);
+      const code = await mapCodeArtifacts(featureIds, c.defect.affected_area, ctx.db, ctx.embedder);
       let errSig = c.defect.error_signature;
       if (errSig) {
         const canon = canonicalizeErrorSignature(errSig.raw);
@@ -167,18 +176,21 @@ export async function processReview(raw: unknown, ctx: PipelineCtx): Promise<Pro
     }
 
     const isActionable = (c.classification.category === 'bug' || c.classification.category === 'feature_request') && !c.moderation.is_spam;
+    const fMatch = featureMapping && featureMapping.feature_id && featureMapping.state !== 'gap'
+      ? [{ feature_id: featureMapping.feature_id, score: featureMapping.confidence, status: 'auto_verified' as const }]
+      : [];
     inferences = {
       text_en: tr.text_en,
       classification: c.classification,
-      extraction: { feature_ids: feat.feature_ids, feature_matches: feat.feature_matches, raw_feature_mentions: c.extraction.raw_feature_mentions, entities: c.extraction.entities },
+      extraction: { feature_ids: featureIds, feature_matches: fMatch, raw_feature_mentions: c.extraction.raw_feature_mentions, entities: c.extraction.entities, feature_mapping: featureMapping },
       moderation: { is_spam: c.moderation.is_spam, spam_score: c.moderation.spam_score, pii_redacted: pii.pii_found.length > 0, pii_types: pii.pii_found.map((p) => p.type), quality_score: c.moderation.quality_score },
       defect,
       signal: null, // Phase 2 — 다음 레이어
       is_actionable: isActionable,
     };
 
-    // pending_review feature → 사람 큐
-    if (feat.feature_matches.some((fm) => fm.status === 'pending_review')) humanReasons.push('feature_pending_review');
+    // gap feature → Insight 검토 큐 (어느 모듈에 추가할지 제안 대상)
+    if (featureMapping?.state === 'gap') humanReasons.push('feature_gap');
   }
 
   // --- 분포/품질 metric (classified·cache_hit 양쪽 공통, inferences 기준) ---

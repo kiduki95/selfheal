@@ -11,6 +11,8 @@ export const config = {
   embeddingClient: (process.env.EMBEDDING_CLIENT ?? 'local') as 'local' | 'cohere',
   anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   cohereApiKey: process.env.COHERE_API_KEY,
+  // 이 selfheal 인스턴스가 매핑 대상으로 삼는 product codebase (graphify가 채운 repo).
+  targetRepo: process.env.TARGET_REPO ?? 'tete-lab/automated-trading-system',
 };
 
 // per-component 버전 (spec §3 versions). 클라이언트 종류에 따라 동적으로 결정해
