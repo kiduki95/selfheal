@@ -10,9 +10,29 @@ import type { LlmClient } from '../clients/llm/types.js';
 const SEV_W: Record<number, number> = { 4: 3, 3: 2, 2: 1.3, 1: 1 };
 const RISK_W: Record<string, number> = { critical: 3, high: 2, medium: 1.5, low: 1 };
 const TREND_W: Record<string, number> = { rising: 1.5, new: 1, stable: 1, declining: 0.5 };
-// Blast-radius weight (CodeFlow impact): a bug in highly-depended-on code affects more of the system.
-// Gentle multiplier so corroboration/severity still dominate. callers = distinct external dependents.
-const impactW = (callers: number): number => (callers >= 6 ? 1.4 : callers >= 3 ? 1.25 : callers >= 1 ? 1.1 : 1);
+// Risk fusion (#1). code-risk.ts path heuristics (payment/auth=critical) stay silent on most repos,
+// leaving risk_tier uniformly 'low' and the dimension dead. We make risk domain-general by fusing in
+// CodeFlow blast-radius: heavily-depended-on code is risky to touch/leave broken regardless of path.
+const RISK_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+const RANK_RISK = ['low', 'medium', 'high', 'critical'] as const;
+type RiskTier = (typeof RANK_RISK)[number];
+
+// Structural blast-radius → a risk tier.
+export function blastTier(callers: number): RiskTier {
+  return callers >= 8 ? 'critical' : callers >= 4 ? 'high' : callers >= 2 ? 'medium' : 'low';
+}
+// Effective risk = stronger of path heuristic and blast-radius. Path heuristic floors business-critical
+// areas (low fan-in but high stakes); blast-radius lifts structurally-central code on any repo.
+export function effectiveRisk(codeTier: string | null | undefined, callers: number): RiskTier {
+  const rank = Math.max(RISK_RANK[codeTier ?? 'low'] ?? 0, RISK_RANK[blastTier(callers)]!);
+  return RANK_RISK[rank]!;
+}
+// Bug priority = evidence × user-severity × effective-code-risk × momentum (orthogonal factors).
+export function bugPriority(f: { corroboration: number; sev: number; codeRiskTier: string | null | undefined; callers: number; trend: string }): { priority: number; risk: RiskTier } {
+  const risk = effectiveRisk(f.codeRiskTier, f.callers);
+  const priority = round2(f.corroboration * (SEV_W[f.sev] ?? 1) * (RISK_W[risk] ?? 1) * (TREND_W[f.trend] ?? 1));
+  return { priority, risk };
+}
 
 export interface ProposalView {
   kind: 'bug_fix' | 'feature_gap' | 'enhancement';
@@ -59,11 +79,11 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
   for (const g of await db.bugGroups(repo)) {
     const sev = Number(g.sev ?? 1);
     const callers = blastRadius[g.code_module] ?? 0; // CodeFlow blast-radius of the buggy module
-    const priority = round2(Number(g.corroboration_count) * (SEV_W[sev] ?? 1) * (RISK_W[g.risk_tier] ?? 1) * (TREND_W[g.trend] ?? 1) * impactW(callers));
+    const { priority, risk } = bugPriority({ corroboration: Number(g.corroboration_count), sev, codeRiskTier: g.risk_tier, callers, trend: g.trend });
     const samples = (g.samples ?? []).filter(Boolean) as string[];
     const title = `[bug] ${g.feature ?? '?'} — ${g.error_signature ?? '오류'} (증거 ${g.corroboration_count}건)`;
-    const body = `## 버그 신호\n- 기능: **${g.feature ?? '?'}** · 코드: \`${g.module_path ?? '미매핑'}\` [risk=${g.risk_tier ?? '?'}, blast-radius=${callers} dependents]\n- 에러 패밀리: \`${g.error_signature ?? '?'}\`\n- 증거: ${g.corroboration_count}건 · 플랫폼 ${(g.affected_platforms ?? []).join(', ')} · 버전 ${(g.affected_versions ?? []).join(', ')} · 추세 ${g.trend}\n\n## 샘플 리뷰\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}\n\n→ Auto-Dev가 \`${g.module_path ?? '?'}\` 수정 PR 후보.`;
-    await db.insertProposal({ repo, kind: 'bug_fix', ref_id: g.id, title, body, priority, target_module: g.module_path ?? null, placement: null, evidence: { corroboration: g.corroboration_count, sev, risk: g.risk_tier, trend: g.trend, blast_radius: callers } });
+    const body = `## 버그 신호\n- 기능: **${g.feature ?? '?'}** · 코드: \`${g.module_path ?? '미매핑'}\` [risk=${risk} (코드 ${g.risk_tier ?? '?'}, blast-radius ${callers}), severity ${sev}]\n- 에러 패밀리: \`${g.error_signature ?? '?'}\`\n- 증거: ${g.corroboration_count}건 · 플랫폼 ${(g.affected_platforms ?? []).join(', ')} · 버전 ${(g.affected_versions ?? []).join(', ')} · 추세 ${g.trend}\n\n## 샘플 리뷰\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}\n\n→ Auto-Dev가 \`${g.module_path ?? '?'}\` 수정 PR 후보.`;
+    await db.insertProposal({ repo, kind: 'bug_fix', ref_id: g.id, title, body, priority, target_module: g.module_path ?? null, placement: null, evidence: { corroboration: g.corroboration_count, sev, risk_effective: risk, code_risk: g.risk_tier, blast_radius: callers, trend: g.trend } });
     out.push({ kind: 'bug_fix', title, priority, target_module: g.module_path ?? null, placement: null, body });
   }
 
