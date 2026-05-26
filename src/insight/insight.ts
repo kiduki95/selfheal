@@ -1,5 +1,8 @@
 import type { Db } from '../db/db.js';
 import type { LlmClient } from '../clients/llm/types.js';
+import { proposalImpact, type ImpactBand } from './impact.js';
+import { suppressionDecision, estimateEffort } from './lifecycle.js';
+import { deriveTrend, type Trend } from '../util/trend.js';
 
 // Insight & Proposal Layer v1 — Processing 신호를 우선순위 매겨 issue 초안으로.
 // 경계(spec §1.3): 여기까지가 "무엇을 왜 먼저"의 제안. 실제 PR/코드 수정은 Auto-Dev.
@@ -45,10 +48,12 @@ export function proposalsStale(lastProcessed: string | null, lastProposal: strin
 export interface ProposalView {
   kind: 'bug_fix' | 'feature_gap' | 'enhancement';
   title: string;
-  priority: number;
+  priority: number; // = unified impact score 0–100 (comparable across kinds)
   target_module: string | null;
   placement: string | null;
   body: string;
+  band?: ImpactBand;
+  effort?: string;
 }
 
 // gap 제안을 코드 그래프(실제 모듈 집합)에 대조 검증 — 환각(없는 모듈 참조) 적발.
@@ -85,16 +90,27 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
   const blastRadius = await db.moduleBlastRadius(repo); // CodeFlow impact → bug priority weight
 
   // 1) 버그픽스 제안 (defective 신호그룹)
+  let suppressed = 0;
   for (const g of await db.bugGroups(repo)) {
-    const sev = Number(g.sev ?? 1);
+    const corroboration = Number(g.corroboration_count);
+    const sev = Math.max(1, Math.min(4, Number(g.sev ?? 1))) as 1 | 2 | 3 | 4;
     const callers = blastRadius[g.code_module] ?? 0; // CodeFlow blast-radius of the buggy module
-    const { priority, risk } = bugPriority({ corroboration: Number(g.corroboration_count), sev, codeRiskTier: g.risk_tier, callers, trend: g.trend });
+    const risk = effectiveRisk(g.risk_tier, callers); // #1: path heuristic fused with blast-radius
+
+    // ④ suppress proposals for incidents that look resolved (and haven't regressed)
+    const rstat = await db.groupResolutionStats(g.id);
+    const sup = suppressionDecision({ resolutionReports: rstat.resolutionReports, reportsSinceResolution: rstat.reportsSinceResolution, trend: g.trend, corroboration });
+    if (sup.suppress) { suppressed++; continue; }
+
+    const impact = proposalImpact({ kind: 'bug_fix', corroboration, severity: sev, risk, trend: g.trend as Trend }); // #1/#2: unified 0–100
+    const effort = estimateEffort({ kind: 'bug_fix', touchedModules: 1, isNewModule: false, blastRadius: callers }); // ⑥
     const samples = (g.samples ?? []).filter(Boolean) as string[];
     const title = `[bug] ${g.feature ?? '?'} — ${g.error_signature ?? '오류'} (증거 ${g.corroboration_count}건)`;
-    const body = `## 버그 신호\n- 기능: **${g.feature ?? '?'}** · 코드: \`${g.module_path ?? '미매핑'}\` [risk=${risk} (코드 ${g.risk_tier ?? '?'}, blast-radius ${callers}), severity ${sev}]\n- 에러 패밀리: \`${g.error_signature ?? '?'}\`\n- 증거: ${g.corroboration_count}건 · 플랫폼 ${(g.affected_platforms ?? []).join(', ')} · 버전 ${(g.affected_versions ?? []).join(', ')} · 추세 ${g.trend}\n\n## 샘플 리뷰\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}\n\n→ Auto-Dev가 \`${g.module_path ?? '?'}\` 수정 PR 후보.`;
-    await db.insertProposal({ repo, kind: 'bug_fix', ref_id: g.id, title, body, priority, target_module: g.module_path ?? null, placement: null, evidence: { corroboration: g.corroboration_count, sev, risk_effective: risk, code_risk: g.risk_tier, blast_radius: callers, trend: g.trend } });
-    out.push({ kind: 'bug_fix', title, priority, target_module: g.module_path ?? null, placement: null, body });
+    const body = `## 버그 신호\n- 기능: **${g.feature ?? '?'}** · 코드: \`${g.module_path ?? '미매핑'}\` [risk=${risk} (코드 ${g.risk_tier ?? '?'}, blast-radius ${callers}), severity ${sev}]\n- 에러 패밀리: \`${g.error_signature ?? '?'}\`\n- 증거: ${g.corroboration_count}건 · 플랫폼 ${(g.affected_platforms ?? []).join(', ')} · 버전 ${(g.affected_versions ?? []).join(', ')} · 추세 ${g.trend}\n- **impact ${impact.score} (${impact.band})** · 추정 공수 ${effort.size} (${effort.weeks})\n\n## 샘플 리뷰\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}\n\n→ Auto-Dev가 \`${g.module_path ?? '?'}\` 수정 PR 후보.`;
+    await db.insertProposal({ repo, kind: 'bug_fix', ref_id: g.id, title, body, priority: impact.score, target_module: g.module_path ?? null, placement: null, evidence: { corroboration, sev, risk_effective: risk, code_risk: g.risk_tier, blast_radius: callers, trend: g.trend, impact: impact.score, band: impact.band, effort: effort.size, effort_weeks: effort.weeks } });
+    out.push({ kind: 'bug_fix', title, priority: impact.score, target_module: g.module_path ?? null, placement: null, body, band: impact.band, effort: effort.size });
   }
+  if (suppressed) console.log(`  ④ suppressed ${suppressed} resolved bug proposal(s)`);
 
   // 2) gap 클러스터링 — 같은 의도(다른 표현) 요청을 묶어 중복 issue 방지
   const rawGaps = await db.gapFeaturesRaw(repo);
@@ -113,23 +129,27 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
     const desc = (gap.samples ?? []).filter(Boolean).slice(0, 2).join(' / ');
     const plan = await llm.proposeGapPlacement({ gap: gap.pref_label, gapDescription: desc, modules: moduleMap });
     const v = verifyGapProposal(plan, realModules); // 코드 그래프 대조 검증
-    const verifyMd = `\n\n## 🔎 검증 (코드 그래프 대조)\n- 배치: \`${plan.module}\` ${plan.placement === 'new_module' ? '(신규 — 코드에 없음, 생성 필요)' : v.moduleExists ? '✅ 실제 모듈' : '⚠️ 코드에 없는데 기존이라 주장'}\n- 참조한 실제 모듈: ${v.referenced.join(', ') || '없음'}${v.invented.length ? `\n- ⚠️ 코드에 없는 참조(환각 의심): ${v.invented.join(', ')}` : ''}\n- **verdict: ${v.verdict}**`;
-    const body = `${plan.body}${verifyMd}\n\n---\n_연결_: ${plan.connection} · _수요_: ${demand}건`;
-    // ungrounded 제안은 신뢰 낮음 → 우선순위 페널티
-    const priority = round2(demand * 2 * (v.verdict === 'ungrounded' ? 0.4 : v.verdict === 'partial' ? 0.8 : 1));
-    await db.insertProposal({ repo, kind: 'feature_gap', ref_id: gap.id, title: plan.title, body, priority, target_module: plan.module, placement: plan.placement, evidence: { demand, verdict: v.verdict, invented: v.invented, referenced: v.referenced } });
-    out.push({ kind: 'feature_gap', title: plan.title, priority, target_module: plan.module, placement: plan.placement, body });
+    const trend = deriveTrend(await db.featureReportTimes(gap.id), Date.now()); // #2: demand momentum
+    const isNew = plan.placement === 'new_module';
+    const impact = proposalImpact({ kind: 'feature_gap', demand, verdict: v.verdict, trend }); // #1/#2 unified; verdict = confidence
+    const effort = estimateEffort({ kind: 'feature_gap', touchedModules: v.referenced.length + 1, isNewModule: isNew, blastRadius: isNew ? 0 : (blastRadius[plan.module] ?? 0) }); // ⑥
+    const verifyMd = `\n\n## 🔎 검증 (코드 그래프 대조)\n- 배치: \`${plan.module}\` ${isNew ? '(신규 — 코드에 없음, 생성 필요)' : v.moduleExists ? '✅ 실제 모듈' : '⚠️ 코드에 없는데 기존이라 주장'}\n- 참조한 실제 모듈: ${v.referenced.join(', ') || '없음'}${v.invented.length ? `\n- ⚠️ 코드에 없는 참조(환각 의심): ${v.invented.join(', ')}` : ''}\n- **verdict: ${v.verdict}**`;
+    const body = `${plan.body}${verifyMd}\n\n---\n_연결_: ${plan.connection} · _수요_: ${demand}건 · _추세_: ${trend} · **impact ${impact.score} (${impact.band})** · 추정 공수 ${effort.size} (${effort.weeks})`;
+    await db.insertProposal({ repo, kind: 'feature_gap', ref_id: gap.id, title: plan.title, body, priority: impact.score, target_module: plan.module, placement: plan.placement, evidence: { demand, verdict: v.verdict, invented: v.invented, referenced: v.referenced, trend, impact: impact.score, band: impact.band, effort: effort.size, effort_weeks: effort.weeks } });
+    out.push({ kind: 'feature_gap', title: plan.title, priority: impact.score, target_module: plan.module, placement: plan.placement, body, band: impact.band, effort: effort.size });
   }
 
   // 3) enhancement 제안 (기존 기능 개선)
   for (const e of await db.enhancementItems(repo)) {
     const demand = Number(e.demand);
+    const trend = deriveTrend(await db.featureReportTimes(e.id), Date.now()); // #2: demand momentum
+    const impact = proposalImpact({ kind: 'enhancement', demand, trend }); // #1/#2 unified
+    const effort = estimateEffort({ kind: 'enhancement', touchedModules: 1, isNewModule: false, blastRadius: 0 }); // ⑥
     const samples = (e.samples ?? []).filter(Boolean) as string[];
     const title = `[enhancement] ${e.pref_label} 개선 (요청 ${demand}건)`;
-    const body = `## 개선 요청\n- 기능: **${e.pref_label}** (기존)\n- 수요: ${demand}건\n\n## 샘플\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}`;
-    const priority = round2(demand * 1.2);
-    await db.insertProposal({ repo, kind: 'enhancement', ref_id: e.id, title, body, priority, target_module: e.pref_label, placement: 'existing_module', evidence: { demand } });
-    out.push({ kind: 'enhancement', title, priority, target_module: e.pref_label, placement: 'existing_module', body });
+    const body = `## 개선 요청\n- 기능: **${e.pref_label}** (기존)\n- 수요: ${demand}건 · 추세 ${trend} · **impact ${impact.score} (${impact.band})** · 추정 공수 ${effort.size} (${effort.weeks})\n\n## 샘플\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}`;
+    await db.insertProposal({ repo, kind: 'enhancement', ref_id: e.id, title, body, priority: impact.score, target_module: e.pref_label, placement: 'existing_module', evidence: { demand, trend, impact: impact.score, band: impact.band, effort: effort.size, effort_weeks: effort.weeks } });
+    out.push({ kind: 'enhancement', title, priority: impact.score, target_module: e.pref_label, placement: 'existing_module', body, band: impact.band, effort: effort.size });
   }
 
   out.sort((a, b) => b.priority - a.priority);

@@ -359,6 +359,33 @@ export class Db {
     await this.query(`UPDATE signal_groups SET status = 'merged' WHERE id = ANY($1::uuid[])`, [dropIds]);
     await this.writeSignalEvent(keepId, 'MERGED', { dropped: dropIds }, 'reconciliation');
   }
+  // Suppression inputs (#4 lifecycle): resolution reports + defect reports filed AFTER the latest one.
+  async groupResolutionStats(groupId: string): Promise<{ resolutionReports: number; reportsSinceResolution: number }> {
+    const rows = await this.query<{ resolution_reports: string; reports_since: string }>(
+      `WITH res AS (
+         SELECT max((pr.facts->>'created_at')::timestamptz) AS latest
+         FROM resolution_signals rs JOIN processed_reviews pr ON pr.id = rs.processed_review_id
+         WHERE rs.signal_group_id = $1
+       )
+       SELECT
+         (SELECT count(*) FROM resolution_signals WHERE signal_group_id = $1) AS resolution_reports,
+         (SELECT count(*) FROM processed_reviews pr, res
+          WHERE pr.signal_group_id = $1 AND res.latest IS NOT NULL
+            AND (pr.facts->>'created_at')::timestamptz > res.latest) AS reports_since`,
+      [groupId],
+    );
+    return { resolutionReports: Number(rows[0]?.resolution_reports ?? 0), reportsSinceResolution: Number(rows[0]?.reports_since ?? 0) };
+  }
+  // Report times for a feature (incl. its merged-away gap members) → gap/enhancement trend (#2).
+  async featureReportTimes(featureId: string): Promise<number[]> {
+    const rows = await this.query<{ t: string | null }>(
+      `SELECT pr.facts->>'created_at' AS t FROM processed_reviews pr
+       WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid IN
+         (SELECT $1::uuid UNION SELECT id FROM feature_registry WHERE merged_into = $1::uuid)`,
+      [featureId],
+    );
+    return rows.map((r) => Date.parse(r.t ?? '')).filter((n) => Number.isFinite(n));
+  }
   async recordResolution(groupId: string, prId: string, appVersion: string | null): Promise<void> {
     await this.query(`INSERT INTO resolution_signals (signal_group_id, processed_review_id, app_version) VALUES ($1,$2,$3)`, [groupId, prId, appVersion]);
     await this.query(`UPDATE signal_groups SET resolution_count = resolution_count + 1 WHERE id = $1`, [groupId]);

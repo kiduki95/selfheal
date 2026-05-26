@@ -11,7 +11,8 @@ const r = new Hono<ApiEnv>();
 r.get('/', async (c) => {
   const rows = await c.var.db.query<any>(
     `SELECT p.id, p.kind, p.title, p.priority, p.target_module, p.placement, p.body,
-            p.evidence->>'verdict' AS verdict,
+            p.evidence->>'verdict' AS verdict, p.evidence->>'band' AS band,
+            p.evidence->>'effort' AS effort, p.evidence->>'effort_weeks' AS effort_weeks,
             COALESCE(pr.decision, 'pending') AS decision, pr.note AS decision_note, pr.decided_at
      FROM proposals p
      LEFT JOIN proposal_reviews pr ON pr.repo = p.repo AND pr.kind = p.kind AND pr.ref_id = p.ref_id
