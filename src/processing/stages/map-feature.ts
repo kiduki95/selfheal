@@ -2,19 +2,22 @@ import type { Db } from '../../db/db.js';
 import type { LlmClient } from '../../clients/llm/types.js';
 import type { z } from 'zod';
 import type { FeatureMappingSchema } from '../../contracts/processed-review.js';
+import { thresholds } from '../../config.js';
 
 type FeatureMapping = z.infer<typeof FeatureMappingSchema>;
 
 // 4.7' mapFeature (P1) — review를 타깃 codebase의 기존 기능에 매핑하거나 gap(floating)으로.
-// 후보는 codeflow가 채운 code-derived grounded feature 전체(소규모면 임베딩 추림 불필요).
-// 판단은 LLM(Claude-as-judge) — 모듈/심볼명과 사용자어를 의미적으로 잇는다. gap이면 emergent feature 생성.
+// 후보 추림: review 임베딩 ↔ feature 임베딩 ANN으로 top-K만 LLM에 보낸다 (repo 크기와 무관하게 payload 고정).
+// reviewVector가 없으면(구 경로) 전체 후보로 degrade. 판단은 LLM(Claude-as-judge) — 모듈/심볼명↔사용자어.
 export async function mapFeature(
-  input: { text: string; affected_area: string | null; category: string; mentions: string[] },
+  input: { text: string; affected_area: string | null; category: string; mentions: string[]; reviewVector?: number[] | null },
   db: Db,
   llm: LlmClient,
   targetRepo: string,
 ): Promise<FeatureMapping> {
-  const candidates = await db.featureCandidates(targetRepo);
+  const candidates = input.reviewVector
+    ? await db.featureCandidatesByVector(targetRepo, input.reviewVector, thresholds.featureShortlistK)
+    : await db.featureCandidates(targetRepo);
   const dec = await llm.mapFeature({
     text: input.text,
     affected_area: input.affected_area,

@@ -199,6 +199,18 @@ export class Db {
     );
     return rows.map((r) => ({ feature_id: r.feature_id, label: r.parent ? `${r.parent} › ${r.label}` : r.label, description: r.description }));
   }
+  // Scalable variant: ANN-shortlist candidates by embedding distance to the review vector, capped at k.
+  // This is what keeps the Claude-judge payload bounded for large repos (vs sending every feature).
+  async featureCandidatesByVector(targetRepo: string, vector: number[], k = 30): Promise<{ feature_id: string; label: string; description: string }[]> {
+    const rows = await this.query<{ feature_id: string; label: string; description: string; parent: string | null }>(
+      `SELECT f.id AS feature_id, f.pref_label AS label, COALESCE(f.description,'') AS description, p.pref_label AS parent
+       FROM feature_registry f LEFT JOIN feature_registry p ON f.parent_id = p.id
+       WHERE f.status='grounded' AND f.repo=$1 AND f.parent_id IS NOT NULL AND f.embedding IS NOT NULL
+       ORDER BY f.embedding <=> $2::vector ASC LIMIT $3`,
+      [targetRepo, toSqlVector(vector), k],
+    );
+    return rows.map((r) => ({ feature_id: r.feature_id, label: r.parent ? `${r.parent} › ${r.label}` : r.label, description: r.description }));
+  }
   // gap = review-emergent floating feature. 후속 클러스터/promote는 P2.
   async upsertEmergentFeature(label: string, normalized: string, targetRepo: string): Promise<string> {
     const rows = await this.query<{ id: string }>(

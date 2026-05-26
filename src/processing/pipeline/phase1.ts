@@ -156,7 +156,7 @@ export async function processReview(raw: unknown, ctx: PipelineCtx): Promise<Pro
     m.inc('feature.mentions', c.extraction.raw_feature_mentions.length);
     if (mapCats) {
       featureMapping = await mapFeature(
-        { text: tr.text_en ?? pii.text_redacted, affected_area: c.defect?.affected_area ?? null, category: c.classification.category, mentions: c.extraction.raw_feature_mentions },
+        { text: tr.text_en ?? pii.text_redacted, affected_area: c.defect?.affected_area ?? null, category: c.classification.category, mentions: c.extraction.raw_feature_mentions, reviewVector: vector },
         ctx.db, ctx.llm, config.targetRepo,
       );
       m.inc(`feature.${featureMapping.state}`);

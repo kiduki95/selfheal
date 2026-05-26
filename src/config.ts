@@ -52,4 +52,7 @@ export const thresholds = {
   classifyLowConf: 0.6, // 0.6~0.85 → low-confidence 플래그, < 0.6 → escalation
   // semanticCache poisoning 방어 (#7): 캐시 적재 자격
   cacheEligibleConf: 0.85,
+  // P1 feature mapping: max candidates sent to the Claude judge. Bounds LLM payload regardless of
+  // repo size — candidates are pre-ranked by embedding ANN (review ↔ feature) and capped at K.
+  featureShortlistK: 30,
 };
