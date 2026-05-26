@@ -96,7 +96,7 @@ export interface MapFeatureOutput {
   usage?: LlmUsage;
 }
 
-// ② graphify 기능 설명 보강 (스캔당 1회) — 코드 심볼 → 사용자어 라벨/설명.
+// ② codeflow 기능 설명 보강 (스캔당 1회) — 코드 심볼 → 사용자어 라벨/설명.
 export interface DescribeFeatureInput {
   symbol: string;
   module: string;

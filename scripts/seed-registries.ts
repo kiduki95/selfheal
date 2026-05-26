@@ -46,7 +46,7 @@ async function main() {
   const db = new Db();
   const embedder = makeEmbeddingClient();
 
-  // 멱등 시드 — 이 시드의 범위만 비움 (graphify가 채운 code-derived 데이터는 보존).
+  // 멱등 시드 — 이 시드의 범위만 비움 (codeflow가 채운 code-derived 데이터는 보존).
   await db.query(`DELETE FROM code_artifact_registry WHERE repo = 'org/app-ios'`);
   await db.query(`DELETE FROM feature_registry WHERE origin = 'manual'`);
 

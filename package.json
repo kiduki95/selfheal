@@ -13,7 +13,7 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:reset": "docker compose down -v && docker compose up -d && wait-on tcp:5433 && tsx scripts/migrate.ts",
     "seed": "tsx scripts/seed-registries.ts",
-    "graphify:scan": "tsx scripts/graphify-scan.ts",
+    "codeflow:scan": "tsx scripts/codeflow-scan.ts",
     "run:corpus": "tsx scripts/run-corpus.ts",
     "insight": "tsx scripts/insight.ts",
     "ui": "tsx scripts/ui-server.ts",

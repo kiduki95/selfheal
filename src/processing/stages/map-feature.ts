@@ -6,7 +6,7 @@ import type { FeatureMappingSchema } from '../../contracts/processed-review.js';
 type FeatureMapping = z.infer<typeof FeatureMappingSchema>;
 
 // 4.7' mapFeature (P1) — review를 타깃 codebase의 기존 기능에 매핑하거나 gap(floating)으로.
-// 후보는 graphify가 채운 code-derived grounded feature 전체(소규모면 임베딩 추림 불필요).
+// 후보는 codeflow가 채운 code-derived grounded feature 전체(소규모면 임베딩 추림 불필요).
 // 판단은 LLM(Claude-as-judge) — 모듈/심볼명과 사용자어를 의미적으로 잇는다. gap이면 emergent feature 생성.
 export async function mapFeature(
   input: { text: string; affected_area: string | null; category: string; mentions: string[] },

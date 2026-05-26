@@ -5,7 +5,7 @@ import type { ScanResult } from './scan.js';
 import { classifyCodeRisk } from '../util/code-risk.js';
 import { toSqlVector } from '../util/vector.js';
 
-// graphify persist (graphify-layer.md §4 persist) — ScanResult를 공유 테이블에 적재.
+// codeflow persist (codeflow-layer.md §4 persist) — ScanResult를 공유 테이블에 적재.
 // P0: 전체 재수집(repo 단위 delete→insert). 증분(content_hash diff)은 후속.
 // 임베딩은 review와 동일 embedder(DI 주입) — affected_area↔artifact 같은 공간(하드 제약 §3.1).
 
@@ -19,7 +19,7 @@ export interface PersistStats {
 // llm 주입 시 component feature에 ② 사용자어 라벨/설명 보강 (스캔당 1회). stub이면 no-op.
 export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingClient, llm?: LlmClient): Promise<PersistStats> {
   const runId = (await db.query<{ id: string }>(
-    `INSERT INTO graphify_runs (repo, ref, status, enrich_mode) VALUES ($1,$2,'running',$3) RETURNING id`,
+    `INSERT INTO codeflow_runs (repo, ref, status, enrich_mode) VALUES ($1,$2,'running',$3) RETURNING id`,
     [scan.repo, scan.ref, embedder.kind === 'local' ? 'stub' : 'anthropic'],
   ))[0]!.id;
 
@@ -129,12 +129,12 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
     if (subCount) console.log(`  ① decomposed into ${subCount} sub-features`);
 
     await db.query(
-      `UPDATE graphify_runs SET status='done', nodes_total=$2, edges_total=$3, features_total=$4, finished_at=now() WHERE id=$1`,
+      `UPDATE codeflow_runs SET status='done', nodes_total=$2, edges_total=$3, features_total=$4, finished_at=now() WHERE id=$1`,
       [runId, scan.nodes.length, edgeCount, scan.features.length],
     );
     return { nodes: scan.nodes.length, edges: edgeCount, features: scan.features.length, byKind };
   } catch (e) {
-    await db.query(`UPDATE graphify_runs SET status='failed', finished_at=now() WHERE id=$1`, [runId]);
+    await db.query(`UPDATE codeflow_runs SET status='failed', finished_at=now() WHERE id=$1`, [runId]);
     throw e;
   }
 }

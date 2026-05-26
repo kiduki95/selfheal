@@ -1,10 +1,9 @@
 import { Db } from '../src/db/db.js';
 import { makeEmbeddingClient } from '../src/clients/embedding/index.js';
 import { makeLlmClient } from '../src/clients/llm/index.js';
-import { scanRepo } from '../src/graphify/scan.js';
-import { persistScan } from '../src/graphify/persist.js';
+import { scanRepo, persistScan } from '../src/codeflow/index.js';
 
-// graphify dogfood: selfheal 자체 src를 스캔해 코드 그래프를 적재 + "모듈→기능" 요약 출력.
+// codeflow dogfood: selfheal 자체 src를 스캔해 코드 그래프를 적재 + "모듈→기능" 요약 출력.
 // 네 비전 1단계 ("현재 코드베이스 기준 어느 모듈에 어떤 기능들이 있는지 스캔·정리")의 구현.
 async function main() {
   const db = new Db();
@@ -12,11 +11,11 @@ async function main() {
   const repo = process.argv[2] ?? 'kiduki95/selfheal';
   const rootDir = process.argv[3] ?? process.cwd();
 
-  // GRAPHIFY_ENRICH=1 이면 LLM(claude-cli 등)으로 ② 사용자어 라벨 보강 (스캔당 1회)
-  const enrich = process.env.GRAPHIFY_ENRICH === '1';
+  // CODEFLOW_ENRICH=1 이면 LLM(claude-cli 등)으로 ② 사용자어 라벨 보강 (스캔당 1회)
+  const enrich = process.env.CODEFLOW_ENRICH === '1';
   const llm = enrich ? makeLlmClient() : undefined;
 
-  console.log(`\n=== Graphify scan: ${repo} (${rootDir})  enrich=${enrich ? 'on' : 'off'} ===`);
+  console.log(`\n=== CodeFlow scan: ${repo} (${rootDir})  enrich=${enrich ? 'on' : 'off'} ===`);
   const scan = scanRepo({ rootDir, repo });
   const stats = await persistScan(scan, db, embedder, llm);
 
@@ -56,6 +55,6 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error('❌ graphify scan failed:', e);
+  console.error('❌ codeflow scan failed:', e);
   process.exit(1);
 });

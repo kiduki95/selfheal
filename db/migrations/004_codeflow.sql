@@ -1,5 +1,5 @@
--- Graphify: 코드베이스를 질의 가능한 아티팩트 그래프로 (graphify-layer.md §5).
--- code_artifact_registry를 graphify가 채우도록 확장 + code_edges/graphify_runs 신설.
+-- CodeFlow: 코드베이스를 질의 가능한 아티팩트 그래프로 (codeflow-layer.md §5).
+-- code_artifact_registry를 codeflow가 채우도록 확장 + code_edges/codeflow_runs 신설.
 -- feature_registry에 origin/status 추가 (code-derived grounded vs review-emergent gap).
 
 ALTER TABLE code_artifact_registry
@@ -29,7 +29,7 @@ CREATE INDEX IF NOT EXISTS idx_edge_src ON code_edges (src_id, kind);
 CREATE INDEX IF NOT EXISTS idx_edge_dst ON code_edges (dst_id, kind);
 
 -- 수집 run (멱등성 · 관찰가능성)
-CREATE TABLE IF NOT EXISTS graphify_runs (
+CREATE TABLE IF NOT EXISTS codeflow_runs (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id     text NOT NULL DEFAULT 'default',
   repo          text NOT NULL,
@@ -45,4 +45,4 @@ CREATE TABLE IF NOT EXISTS graphify_runs (
   started_at    timestamptz NOT NULL DEFAULT now(),
   finished_at   timestamptz
 );
-CREATE INDEX IF NOT EXISTS idx_graphify_runs ON graphify_runs (repo, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_codeflow_runs ON codeflow_runs (repo, started_at DESC);

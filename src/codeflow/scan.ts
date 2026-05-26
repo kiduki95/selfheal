@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, relative, dirname, sep } from 'node:path';
 
-// graphify T1 parse (graphify-layer.md §4) — TypeScript Compiler API로 결정론 추출 (Claude 0).
+// codeflow T1 parse (codeflow-layer.md §4) — TypeScript Compiler API로 결정론 추출 (Claude 0).
 // tree-sitter 대신 이미 있는 `typescript` 의존성 사용 → 네이티브 빌드 없이 크로스플랫폼.
 // .ts/.tsx 다중 소스루트 지원 (Next.js app/components/lib/hooks 등). 산출: module/file/symbol
 // 노드 + contains/imports 엣지 + 모듈→기능(feature) 후보.
@@ -240,7 +240,7 @@ function declaredSymbols(stmt: ts.Statement, sf: ts.SourceFile): SymInfo[] {
   return [];
 }
 
-// "사용자 대면 기능다운" 심볼 판정 — leaf feature 승격 대상 (graphify ① finer features).
+// "사용자 대면 기능다운" 심볼 판정 — leaf feature 승격 대상 (codeflow ① finer features).
 // PascalCase 컴포넌트/클래스/페이지만; ui 프리미티브·타입·유틸·Next 노이즈 제외.
 const EXCLUDE_MODULES = /^(components\/ui|lib|hooks|core)$/;
 const NOISE_SYMBOLS = new Set(['Loading', 'RootLayout', 'Layout', 'Metadata', 'metadata', 'ThemeProvider', 'Toaster', 'Provider']);
