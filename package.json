@@ -1,0 +1,33 @@
+{
+  "name": "ouroboros-processing",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "description": "Ouroboros Processing Layer — Phase 1 (per-review) pipeline",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:reset": "docker compose down -v && docker compose up -d && wait-on tcp:5433 && tsx scripts/migrate.ts",
+    "seed": "tsx scripts/seed-registries.ts",
+    "run:corpus": "tsx scripts/run-corpus.ts",
+    "verify": "tsx scripts/migrate.ts && tsx scripts/seed-registries.ts && tsx scripts/run-corpus.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "franc-min": "^6.2.0",
+    "pg": "^8.13.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

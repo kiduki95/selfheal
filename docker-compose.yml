@@ -1,0 +1,22 @@
+services:
+  db:
+    # pgvector/pgvector ships Postgres 16 + the `vector` extension preinstalled.
+    image: pgvector/pgvector:pg16
+    container_name: ouroboros-db
+    environment:
+      POSTGRES_USER: ouroboros
+      POSTGRES_PASSWORD: ouroboros
+      POSTGRES_DB: ouroboros
+    ports:
+      # host 5433 -> container 5432, to avoid clashing with a local Postgres on 5432
+      - "5433:5432"
+    volumes:
+      - ouroboros_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ouroboros -d ouroboros"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  ouroboros_pgdata:
