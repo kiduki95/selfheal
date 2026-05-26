@@ -38,10 +38,14 @@ function runClaude(prompt: string, model: 'sonnet' | 'haiku' | 'opus'): Promise<
     const child = spawn(CLAUDE_BIN, args, { shell: false });
     let out = '';
     let err = '';
+    // Kill a hung CLI rather than blocking the stage forever (a live-but-silent process won't fire 'close').
+    const timeoutMs = Number(process.env.CLAUDE_CLI_TIMEOUT_MS ?? 180000);
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`claude timed out after ${timeoutMs}ms`)); }, timeoutMs);
     child.stdout.on('data', (d) => (out += d));
     child.stderr.on('data', (d) => (err += d));
-    child.on('error', reject);
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
     child.on('close', (code) => {
+      clearTimeout(timer);
       if (code !== 0) return reject(new Error(`claude exited ${code}: ${err || out}`));
       try {
         const j = JSON.parse(out);

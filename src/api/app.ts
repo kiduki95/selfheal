@@ -31,6 +31,9 @@ export function createApp(db: Db = new Db()): Hono<ApiEnv> {
   }
   app.route('/api', api);
 
+  // Keep the envelope contract even when a handler throws (DB down, bad cast) instead of a bare 500.
+  app.onError((err, c) => c.json({ source: 'mock' as const, repo: config.targetRepo, data: null, note: `error: ${String(err)}` }, 500));
+
   serveStaticWeb(app); // non-/api paths -> static web/ (catch-all, registered last)
   return app;
 }

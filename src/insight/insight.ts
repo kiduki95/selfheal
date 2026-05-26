@@ -122,7 +122,9 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
     const { clusters } = await llm.clusterGaps({ gaps: rawGaps });
     for (const c of clusters) {
       if (c.member_ids.length <= 1) continue;
-      const [canon, ...rest] = c.member_ids;
+      // Deterministic canonical (smallest id), NOT member_ids[0] — the LLM may order members
+      // differently across runs, which would change the gap's ref_id and detach HITL approvals.
+      const [canon, ...rest] = [...c.member_ids].sort();
       await db.mergeGapFeatures(canon!, rest, c.canonical_label);
     }
   }
@@ -160,8 +162,4 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
 
   out.sort((a, b) => b.priority - a.priority);
   return out;
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
 }

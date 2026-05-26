@@ -346,7 +346,13 @@ export class Db {
   // Merge dropIds into keepId: reassign members, recompute aggregates from members, close dropped (provenance kept).
   async mergeSignalGroups(keepId: string, dropIds: string[], unionArtifacts: string[]): Promise<void> {
     if (!dropIds.length) return;
-    await this.query(`UPDATE processed_reviews SET signal_group_id = $1 WHERE signal_group_id = ANY($2::uuid[])`, [keepId, dropIds]);
+    // signal_group_id is a GENERATED column from inferences.signal.signal_group_id — reassign membership
+    // by mutating that JSON source (a direct UPDATE of the generated column is rejected by Postgres).
+    await this.query(
+      `UPDATE processed_reviews SET inferences = jsonb_set(inferences, '{signal,signal_group_id}', to_jsonb($1::text), true)
+       WHERE signal_group_id = ANY($2::uuid[])`,
+      [keepId, dropIds],
+    );
     await this.query(
       `UPDATE signal_groups SET
          code_artifact_ids = $2::uuid[],
@@ -371,7 +377,9 @@ export class Db {
          (SELECT count(*) FROM resolution_signals WHERE signal_group_id = $1) AS resolution_reports,
          (SELECT count(*) FROM processed_reviews pr, res
           WHERE pr.signal_group_id = $1 AND res.latest IS NOT NULL
-            AND (pr.facts->>'created_at')::timestamptz > res.latest) AS reports_since`,
+            AND (pr.facts->>'created_at')::timestamptz > res.latest
+            -- defensive: only true defect reports count as regression (exclude any resolution-report rows)
+            AND pr.id NOT IN (SELECT processed_review_id FROM resolution_signals WHERE signal_group_id = $1)) AS reports_since`,
       [groupId],
     );
     return { resolutionReports: Number(rows[0]?.resolution_reports ?? 0), reportsSinceResolution: Number(rows[0]?.reports_since ?? 0) };
@@ -451,10 +459,10 @@ export class Db {
       `SELECT g.id, g.error_signature, g.corroboration_count, g.trend, g.affected_platforms, g.affected_versions,
         (SELECT max(CASE pr.inferences->'classification'->>'severity' WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END)
            FROM processed_reviews pr WHERE pr.signal_group_id = g.id) AS sev,
-        (SELECT fr.pref_label FROM processed_reviews pr JOIN feature_registry fr ON fr.id=(pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid WHERE pr.signal_group_id = g.id LIMIT 1) AS feature,
-        (SELECT (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') FROM processed_reviews pr WHERE pr.signal_group_id = g.id AND (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') IS NOT NULL LIMIT 1) AS feature_id,
+        (SELECT fr.pref_label FROM processed_reviews pr JOIN feature_registry fr ON fr.id=(pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid WHERE pr.signal_group_id = g.id ORDER BY pr.created_at LIMIT 1) AS feature,
+        (SELECT (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') FROM processed_reviews pr WHERE pr.signal_group_id = g.id AND (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') IS NOT NULL ORDER BY pr.created_at LIMIT 1) AS feature_id,
         ca.path AS module_path, ca.module AS code_module, ca.risk_tier,
-        (SELECT array_agg(t) FROM (SELECT pr.facts->>'text_redacted' AS t FROM processed_reviews pr WHERE pr.signal_group_id = g.id LIMIT 3) s) AS samples
+        (SELECT array_agg(t) FROM (SELECT pr.facts->>'text_redacted' AS t FROM processed_reviews pr WHERE pr.signal_group_id = g.id ORDER BY pr.created_at LIMIT 3) s) AS samples
        FROM signal_groups g
        LEFT JOIN LATERAL (SELECT path, module, risk_tier FROM code_artifact_registry WHERE id = ANY(g.code_artifact_ids) ORDER BY risk_score DESC LIMIT 1) ca ON true
        WHERE g.status = 'open'

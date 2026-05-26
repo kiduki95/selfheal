@@ -2,7 +2,11 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { groupComponents, runReconciliation, type ReconcileGroup } from '../src/processing/pipeline/reconciliation.js';
 import { canConnect, setupTestDb, dropTestDb, truncateAll, makeTestCtx, review } from './helpers/testdb.js';
 import { processReview } from '../src/processing/index.js';
+import { LocalEmbeddingClient } from '../src/clients/embedding/local.js';
+import { randomUUID } from 'node:crypto';
 import type { Db } from '../src/db/db.js';
+
+const embedder = new LocalEmbeddingClient();
 
 const g = (id: string, canonical: string | null, artifacts: string[]): ReconcileGroup => ({ id, canonical, artifacts, firstSeen: '2026-05-01' });
 
@@ -58,5 +62,32 @@ describe.skipIf(!reachable)('grouping is order-independent after reconciliation 
     const b = await processInOrder([2, 1, 0]);
     expect(a).toBe(b);
     expect(a).toBe('1,2'); // one hang (1) + one merged crash group (2)
+  });
+
+  // Directly exercises mergeSignalGroups (the inline canonical match in the test above never
+  // actually triggers a merge — it caught a BLOCKER: signal_group_id is a GENERATED column).
+  let n = 0;
+  async function seedDefectGroup(canonical: string, artifacts: string[]): Promise<void> {
+    const sid = `d${++n}`;
+    const rr = await db.insertRawReview('app_store', sid, { text: sid }, '2026-05-20T00:00:00Z');
+    const inf = { classification: { severity: 'high' }, extraction: { feature_mapping: { feature_id: null, state: 'defective' } }, defect: { error_signature: { canonical } } };
+    const pr = await db.query<{ id: string }>(
+      `INSERT INTO processed_reviews (id, source, source_id, raw_review_id, facts, inferences, versions, created_at, processed_at, llm_calls)
+       VALUES (gen_random_uuid(),'app_store',$1,$2,$3,$4,'{}','2026-05-20T00:00:00Z','2026-05-20T00:00:00Z','[]') RETURNING id`,
+      [sid, rr.id, JSON.stringify({ created_at: '2026-05-20T00:00:00Z', platform: 'ios' }), JSON.stringify(inf)],
+    );
+    const gid = await db.createSignalGroup({ repReviewId: pr[0]!.id, embedding: (await embedder.embed(canonical)).vector, canonical, artifactIds: artifacts, regressionHint: null, firstSeen: '2026-05-20T00:00:00Z' });
+    await db.query(`UPDATE processed_reviews SET inferences = jsonb_set(inferences, '{signal}', $2::jsonb) WHERE id = $1`, [pr[0]!.id, JSON.stringify({ signal_group_id: gid })]);
+  }
+
+  it('merges same-canonical groups bridged by a shared artifact + reassigns members (no GENERATED-column error)', async () => {
+    const A = randomUUID(), B = randomUUID();
+    await seedDefectGroup('crash', [A]);
+    await seedDefectGroup('crash', [B]);
+    await seedDefectGroup('crash', [A, B]); // bridges A and B → all one component
+    await runReconciliation(db);
+    const open = await db.query<{ c: number }>(`SELECT corroboration_count::int c FROM signal_groups WHERE status='open'`);
+    expect(open.length).toBe(1); // 3 groups → 1
+    expect(open[0]!.c).toBe(3); // members reassigned via the generated column's JSON source + recounted
   });
 });
