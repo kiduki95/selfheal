@@ -122,6 +122,21 @@ export interface EnumerateSubFeaturesOutput {
   subFeatures: SubFeature[]; // 단순 컴포넌트면 빈 배열
 }
 
+// Insight: gap(미구현 요청) → 코드 모듈맵 기반 배치 제안 + issue 초안.
+export interface ProposeGapInput {
+  gap: string;
+  gapDescription: string;
+  // 타깃 codebase의 모듈→기능 맵 + 실제 import 의존성(code_edges) — grounding 근거
+  modules: { module: string; features: string[]; imports?: string[] }[];
+}
+export interface ProposeGapOutput {
+  placement: 'existing_module' | 'new_module';
+  module: string; // 기존 모듈명 또는 제안 신규 모듈명
+  connection: string; // 어떤 기존 모듈과 어떻게 연결되는지
+  title: string;
+  body: string; // GitHub issue 본문(markdown)
+}
+
 export interface LlmClient {
   readonly kind: 'stub' | 'anthropic';
   translate(input: TranslateInput): Promise<TranslateOutput>;
@@ -130,6 +145,7 @@ export interface LlmClient {
   mapFeature(input: MapFeatureInput): Promise<MapFeatureOutput>;
   describeFeature(input: DescribeFeatureInput): Promise<DescribeFeatureOutput>;
   enumerateSubFeatures(input: EnumerateSubFeaturesInput): Promise<EnumerateSubFeaturesOutput>;
+  proposeGapPlacement(input: ProposeGapInput): Promise<ProposeGapOutput>;
 }
 
 // 미사용 import 경고 회피용 re-export

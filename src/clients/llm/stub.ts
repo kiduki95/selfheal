@@ -12,6 +12,8 @@ import type {
   DescribeFeatureOutput,
   EnumerateSubFeaturesInput,
   EnumerateSubFeaturesOutput,
+  ProposeGapInput,
+  ProposeGapOutput,
 } from './types.js';
 import type { Category } from '../../contracts/processed-review.js';
 
@@ -244,6 +246,27 @@ export class StubLlmClient implements LlmClient {
   // ① sub-feature 열거 stub — 분해 안 함(claude-cli 전용). 빈 배열.
   async enumerateSubFeatures(_input: EnumerateSubFeaturesInput): Promise<EnumerateSubFeaturesOutput> {
     return { subFeatures: [] };
+  }
+
+  // Insight gap 배치 제안 stub — 키워드 겹치는 모듈 있으면 거기, 없으면 신규. (진짜 추론은 claude-cli)
+  async proposeGapPlacement(input: ProposeGapInput): Promise<ProposeGapOutput> {
+    const hints = expandHints(`${input.gap} ${input.gapDescription}`.toLowerCase());
+    let best: { module: string; score: number } | null = null;
+    for (const m of input.modules) {
+      const hay = `${m.module} ${m.features.join(' ')}`.toLowerCase();
+      let score = 0;
+      for (const h of hints) if (hay.includes(h)) score++;
+      if (!best || score > best.score) best = { module: m.module, score };
+    }
+    const existing = best && best.score >= 1;
+    const module = existing ? best!.module : `${input.gap.replace(/\s+/g, '')}Module(신규)`;
+    return {
+      placement: existing ? 'existing_module' : 'new_module',
+      module,
+      connection: existing ? `${module}에 기능 추가` : '신규 모듈 — 관련 모듈과 연결 검토 필요',
+      title: `[feature] ${input.gap} 지원`,
+      body: `## 요청 기능\n${input.gap} — ${input.gapDescription}\n\n## 제안 배치\n- ${existing ? `기존 모듈 \`${module}\`에 추가` : `신규 모듈 \`${module}\` 필요`}\n`,
+    };
   }
 }
 

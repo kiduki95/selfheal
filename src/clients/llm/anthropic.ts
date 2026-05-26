@@ -12,6 +12,8 @@ import type {
   DescribeFeatureOutput,
   EnumerateSubFeaturesInput,
   EnumerateSubFeaturesOutput,
+  ProposeGapInput,
+  ProposeGapOutput,
 } from './types.js';
 import { thresholds } from '../../config.js';
 
@@ -202,6 +204,24 @@ export class AnthropicLlmClient implements LlmClient {
     } catch {
       return { subFeatures: [] };
     }
+  }
+
+  async proposeGapPlacement(input: ProposeGapInput): Promise<ProposeGapOutput> {
+    const map = input.modules.map((m) => `- ${m.module}: ${m.features.slice(0, 8).join(', ')}`).join('\n');
+    const { json } = await this.call({
+      model: MODELS.classify,
+      max_tokens: 1024,
+      system: [{ type: 'text', text: 'Propose where to add a requested missing feature in the codebase. ONLY JSON {"placement":"existing_module"|"new_module","module":string,"connection":string,"title":string,"body":string}.', cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: `Missing feature: ${input.gap} — ${input.gapDescription}\n\nModule map:\n${map}` }],
+    });
+    const text = (json.content ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
+    const m = text.match(/\{[\s\S]*\}/);
+    const o = m ? JSON.parse(m[0]) : {};
+    return {
+      placement: o.placement === 'new_module' ? 'new_module' : 'existing_module',
+      module: String(o.module ?? '?'), connection: String(o.connection ?? ''),
+      title: String(o.title ?? `[feature] ${input.gap}`), body: String(o.body ?? input.gapDescription),
+    };
   }
 
   async prefilterEscalation(text: string): Promise<PrefilterEscalationOutput> {

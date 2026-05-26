@@ -325,6 +325,79 @@ export class Db {
     return Number(rows[0]?.n ?? 0);
   }
 
+  // === Insight & Proposal Layer (P2) ===
+  // 타깃 codebase 모듈 → 컴포넌트 기능 맵 (gap 배치 제안 입력)
+  async moduleMap(repo: string): Promise<{ module: string; features: string[] }[]> {
+    return this.query(
+      `SELECT p.pref_label AS module, array_agg(DISTINCT c.pref_label) AS features
+       FROM feature_registry p JOIN feature_registry c ON c.parent_id = p.id
+       WHERE p.repo = $1 AND p.parent_id IS NULL
+       GROUP BY p.pref_label ORDER BY p.pref_label`,
+      [repo],
+    );
+  }
+  // 모듈 간 실제 import 의존성 (code_edges 그래프 → gap 제안 grounding/검증의 ground truth)
+  async moduleImports(repo: string): Promise<{ module: string; imports: string[] }[]> {
+    return this.query(
+      `SELECT s.module AS module, array_remove(array_agg(DISTINCT d.module), s.module) AS imports
+       FROM code_edges e
+       JOIN code_artifact_registry s ON s.id = e.src_id
+       JOIN code_artifact_registry d ON d.id = e.dst_id
+       WHERE e.repo = $1 AND e.kind = 'imports' AND s.module <> d.module
+       GROUP BY s.module ORDER BY s.module`,
+      [repo],
+    );
+  }
+  // 타깃 repo의 실제 모듈 집합 (검증용)
+  async moduleNames(repo: string): Promise<string[]> {
+    const rows = await this.query<{ module: string }>(`SELECT DISTINCT module FROM code_artifact_registry WHERE repo=$1 AND kind='module'`, [repo]);
+    return rows.map((r) => r.module);
+  }
+
+  // 액션 가능한 버그 신호그룹 (corroboration + 심각도 + 코드 모듈 + risk)
+  async bugGroups(repo: string): Promise<any[]> {
+    return this.query(
+      `SELECT g.id, g.error_signature, g.corroboration_count, g.trend, g.affected_platforms, g.affected_versions,
+        (SELECT max(CASE pr.inferences->'classification'->>'severity' WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END)
+           FROM processed_reviews pr WHERE pr.signal_group_id = g.id) AS sev,
+        (SELECT fr.pref_label FROM processed_reviews pr JOIN feature_registry fr ON fr.id=(pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid WHERE pr.signal_group_id = g.id LIMIT 1) AS feature,
+        ca.path AS module_path, ca.risk_tier,
+        (SELECT array_agg(t) FROM (SELECT pr.facts->>'text_redacted' AS t FROM processed_reviews pr WHERE pr.signal_group_id = g.id LIMIT 3) s) AS samples
+       FROM signal_groups g
+       LEFT JOIN LATERAL (SELECT path, risk_tier FROM code_artifact_registry WHERE id = ANY(g.code_artifact_ids) ORDER BY risk_score DESC LIMIT 1) ca ON true
+       WHERE g.status = 'open'
+       ORDER BY g.corroboration_count DESC`,
+    );
+  }
+  async gapFeatures2(repo: string): Promise<any[]> {
+    return this.query(
+      `SELECT f.id, f.pref_label,
+        (SELECT count(*) FROM processed_reviews pr WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') = f.id::text) AS demand,
+        (SELECT array_agg(t) FROM (SELECT pr.facts->>'text_redacted' AS t FROM processed_reviews pr WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') = f.id::text LIMIT 3) s) AS samples
+       FROM feature_registry f WHERE f.status = 'gap' AND f.repo = $1 ORDER BY demand DESC`,
+      [repo],
+    );
+  }
+  async enhancementItems(repo: string): Promise<any[]> {
+    return this.query(
+      `SELECT fr.id, fr.pref_label, count(*)::int AS demand, array_agg(pr.facts->>'text_redacted') AS samples
+       FROM processed_reviews pr JOIN feature_registry fr ON fr.id = (pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid
+       WHERE pr.inferences->'extraction'->'feature_mapping'->>'state' = 'enhancement' AND fr.repo = $1
+       GROUP BY fr.id, fr.pref_label ORDER BY demand DESC`,
+      [repo],
+    );
+  }
+  async clearProposals(repo: string): Promise<void> {
+    await this.query(`DELETE FROM proposals WHERE repo = $1`, [repo]);
+  }
+  async insertProposal(p: { repo: string; kind: string; ref_id: string | null; title: string; body: string; priority: number; target_module: string | null; placement: string | null; evidence: unknown }): Promise<void> {
+    await this.query(
+      `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [p.repo, p.kind, p.ref_id, p.title, p.body, p.priority, p.target_module, p.placement, JSON.stringify(p.evidence ?? {})],
+    );
+  }
+
   // --- persist (tx) ---
   async persistProcessed(pr: ProcessedReview, vector: number[] | null, embedderModel: string): Promise<void> {
     const client = await this.pool.connect();

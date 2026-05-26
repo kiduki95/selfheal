@@ -83,8 +83,18 @@ async function sectionsHtml() {
   const badge = (s: string) => (s === 'defective' ? `<span class="b def">defective</span>` : s === 'gap' ? `<span class="b gap">gap</span>` : s === 'enhancement' ? `<span class="b enh">enhancement</span>` : s === 'grounded' ? `<span class="b grd">grounded</span>` : '');
   const rows = reviews.map((r) => `<tr><td class="mono">${esc(r.source_id)}</td><td>${esc(r.category)}${r.severity ? ` <span class="sev ${esc(r.severity)}">${esc(r.severity)}</span>` : ''}</td><td>${badge(r.fstate)} ${r.feature ? esc(r.feature) : r.fstate === 'gap' ? '<i>미구현</i>' : '—'}</td><td class="txt">${esc((r.text ?? '').slice(0, 64))}</td></tr>`).join('');
   const grps = groups.map((g) => `<div class="grp ${g.corroboration_count > 1 ? 'corro' : ''}">${g.corroboration_count > 1 ? '⭐ ' : ''}<b>${esc(g.feature ?? '?')}</b> <span class="b">${esc(g.error_signature ?? '?')}</span> · 증거 ${g.corroboration_count} · ${esc((g.affected_platforms ?? []).join(', '))} · ${esc(g.trend)}</div>`).join('');
+  // ④ Insight 제안 (issue 초안)
+  const props = await db.query<any>(`SELECT kind, title, priority, target_module, placement, body, evidence->>'verdict' AS verdict FROM proposals WHERE repo=$1 ORDER BY priority DESC`, [REPO]);
+  const vBadge = (v: string) => v === 'grounded' ? '<span class="b grd">✅검증</span>' : v === 'partial' ? '<span class="b gap">⚠️부분</span>' : v === 'ungrounded' ? '<span class="b def">⚠️미검증</span>' : '';
+  const propCards = props.map((p) => {
+    const tag = p.kind === 'bug_fix' ? '<span class="b def">🔴 bug</span>' : p.kind === 'feature_gap' ? '<span class="b gap">🟡 gap</span>' : '<span class="b enh">🔵 enhancement</span>';
+    const place = p.kind === 'feature_gap' ? ` → ${p.placement === 'new_module' ? '신규 모듈' : '기존 모듈'} <code>${esc(p.target_module)}</code> ${vBadge(p.verdict)}` : p.target_module ? ` → <code>${esc(p.target_module)}</code>` : '';
+    return `<details class="prop"><summary>${tag} <b>P${esc(p.priority)}</b> ${esc(p.title)}${place}</summary><pre>${esc(p.body)}</pre></details>`;
+  }).join('');
+
   return `<h2>② 리뷰 → 기능 매핑 (${reviews.length})</h2><table>${rows}</table>
-    <h2>③ corroborated 신호 그룹</h2>${grps || '<i>없음</i>'}`;
+    <h2>③ corroborated 신호 그룹</h2>${grps || '<i>없음</i>'}
+    <h2>④ Insight 제안 — issue 초안 (우선순위순) ${props.length ? `· ${props.length}건` : ''}</h2>${propCards || '<i>없음 — npm run insight 실행 필요</i>'}`;
 }
 
 const PAGE = (sections: string) => `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>selfheal · feature graph</title>
@@ -102,6 +112,8 @@ const PAGE = (sections: string) => `<!doctype html><html lang="ko"><head><meta c
   .b.def{background:#7f1d1d;color:#fecaca}.b.gap{background:#78550c;color:#fde68a}.b.grd{background:#14532d;color:#bbf7d0}.b.enh{background:#1e3a5f;color:#bfdbfe}
   .sev{font-size:10px;padding:0 5px;border-radius:3px;background:#333}.sev.critical{background:#7f1d1d;color:#fecaca}.sev.high{background:#7c2d12;color:#fed7aa}
   .grp{background:#161a24;border:1px solid #262b38;border-radius:8px;padding:8px 10px;margin:6px 0;font-size:13px}.grp.corro{border-color:#a16207}
+  .prop{background:#161a24;border:1px solid #262b38;border-radius:8px;padding:8px 10px;margin:6px 0}.prop summary{cursor:pointer;font-size:13px}.prop pre{white-space:pre-wrap;color:#aab;font-size:12px;margin:8px 0 0;border-top:1px solid #262b38;padding-top:8px}
+  code{background:#1d2230;padding:1px 5px;border-radius:4px;font-size:12px}
 </style></head><body><div class="wrap">
   <h1>selfheal · Processing Layer — feature graph</h1>
   <div class="sub">target: <b>${esc(REPO)}</b> · 코드에서 추출한 <b>모듈→기능</b> 지도 위에 리뷰를 매핑. 노란 노드 = 미구현 요청(floating gap).</div>

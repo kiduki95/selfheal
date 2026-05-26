@@ -13,6 +13,8 @@ import type {
   DescribeFeatureOutput,
   EnumerateSubFeaturesInput,
   EnumerateSubFeaturesOutput,
+  ProposeGapInput,
+  ProposeGapOutput,
 } from './types.js';
 import { thresholds } from '../../config.js';
 
@@ -215,6 +217,34 @@ ONLY JSON: {"subFeatures":[{"label":"<한국어>","description":"<한 줄>","anc
       return { subFeatures: subs.filter((s: any) => s && s.label).slice(0, 12).map((s: any) => ({ label: String(s.label), description: String(s.description ?? ''), anchors: Array.isArray(s.anchors) ? s.anchors.map(String) : [] })) };
     } catch {
       return { subFeatures: [] };
+    }
+  }
+
+  // Insight: gap을 코드 모듈맵에 배치 제안 + issue 초안 (Claude 추론).
+  async proposeGapPlacement(input: ProposeGapInput): Promise<ProposeGapOutput> {
+    const map = input.modules.map((m) => `- ${m.module}: [기능: ${m.features.slice(0, 8).join(', ')}]${m.imports?.length ? ` [실제 import: ${m.imports.join(', ')}]` : ''}`).join('\n');
+    const prompt = `한 주식 자동매매 앱에 사용자들이 요청한 **미구현 기능**:
+"${input.gap}" — ${input.gapDescription}
+
+현재 코드베이스의 모듈 → 기능 + **실제 import 의존성**(코드 그래프에서 추출):
+${map}
+
+이 기능을 추가하려면 어떻게 해야 할지 PM/아키텍트 관점에서 제안하라.
+- 기존 모듈 중 자연스럽게 품을 곳이 있으면 거기에(existing_module), 없으면 신규 모듈(new_module).
+- **연결은 반드시 위에 나열된 실제 모듈만 참조**하라(없는 모듈 지어내지 말 것). "실제 import"가 진짜 의존성이다.
+ONLY JSON: {"placement":"existing_module"|"new_module","module":"<위 목록의 모듈명 또는 신규명>","connection":"<나열된 실제 모듈로만 연결 설명>","title":"<이슈 제목>","body":"<마크다운: 요청 배경 / 제안 배치 / 연결(실제 모듈) / 작업 항목>"}`;
+    const r = await runClaude(prompt, 'sonnet');
+    try {
+      const o = extractJson(r.result);
+      return {
+        placement: o.placement === 'new_module' ? 'new_module' : 'existing_module',
+        module: String(o.module ?? '?'),
+        connection: String(o.connection ?? ''),
+        title: String(o.title ?? `[feature] ${input.gap}`),
+        body: String(o.body ?? ''),
+      };
+    } catch {
+      return { placement: 'new_module', module: '?', connection: '', title: `[feature] ${input.gap}`, body: input.gapDescription };
     }
   }
 }

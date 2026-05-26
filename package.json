@@ -15,6 +15,7 @@
     "seed": "tsx scripts/seed-registries.ts",
     "graphify:scan": "tsx scripts/graphify-scan.ts",
     "run:corpus": "tsx scripts/run-corpus.ts",
+    "insight": "tsx scripts/insight.ts",
     "ui": "tsx scripts/ui-server.ts",
     "verify": "tsx scripts/migrate.ts && tsx scripts/seed-registries.ts && tsx scripts/run-corpus.ts",
     "typecheck": "tsc --noEmit",

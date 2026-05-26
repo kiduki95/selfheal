@@ -97,7 +97,7 @@ export function scanRepo(opts: ScanOptions): ScanResult {
     for (const stmt of sf.statements) {
       if (ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier)) {
         const spec = stmt.moduleSpecifier.text;
-        if (spec.startsWith('.')) importPairs.push({ fromFile: relPath, toRel: resolveImport(relPath, spec) });
+        if (spec.startsWith('.') || spec.startsWith('@/')) importPairs.push({ fromFile: relPath, toRel: resolveImport(relPath, spec) });
         continue;
       }
       if (!isExported(stmt)) continue;
@@ -138,11 +138,12 @@ export function scanRepo(opts: ScanOptions): ScanResult {
     edges.push({ srcKey: `module:${module}`, dstKey: fileKey, kind: 'contains' });
   }
 
-  // imports 엣지 (해소되는 것만)
+  // imports 엣지 (해소되는 것만) — 확장자 없는 별칭/상대경로 모두 .ts/.tsx/index로 시도
   for (const { fromFile, toRel } of importPairs) {
-    for (const cand of [toRel, toRel.replace(/\.tsx$/, '.ts'), toRel.replace(/\.ts$/, '.tsx'), `${toRel.replace(/\.(ts|tsx)$/, '')}/index.ts`, `${toRel.replace(/\.(ts|tsx)$/, '')}/index.tsx`]) {
+    const base = toRel.replace(/\.(ts|tsx|js)$/, '');
+    for (const cand of [toRel, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]) {
       const dst = fileKeyByPath.get(cand);
-      if (dst) {
+      if (dst && dst !== fromFile) {
         edges.push({ srcKey: fromFile, dstKey: dst, kind: 'imports' });
         break;
       }
@@ -283,8 +284,8 @@ function card(path: string, module: string, symbol: string | null, signature: st
   return [path, module, symbol, signature, doc].filter(Boolean).join(' · ');
 }
 function resolveImport(fromRel: string, spec: string): string {
-  const base = toPosix(join(dirname(fromRel), spec));
-  return base.replace(/\.js$/, '.ts');
+  if (spec.startsWith('@/')) return spec.slice(2); // tsconfig paths: @/* → 루트상대
+  return toPosix(join(dirname(fromRel), spec)).replace(/\.js$/, '');
 }
 function pushMember(map: Map<string, string[]>, k: string, v: string): void {
   const a = map.get(k) ?? [];
