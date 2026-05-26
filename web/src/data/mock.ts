@@ -5,8 +5,133 @@
 // notes & transcription SaaS. SelfHeal ingests reviews of Loop,
 // maps them to Loop's repo modules, and proposes improvements.
 
+// ----- Canonical domain types ----------------------------------------------
+
+export interface PipelineStage {
+  num: string;
+  name: string;
+  value: number;
+  unit: string;
+  sub: string;
+  sparkData: number[];
+}
+
+export type SourceKind =
+  | 'appstore'
+  | 'playstore'
+  | 'reddit'
+  | 'twitter'
+  | 'github'
+  | 'discord'
+  | 'web'
+  | 'intercom';
+
+export interface Source {
+  id: string;
+  kind: SourceKind;
+  product: string;
+  name: string;
+  region: string;
+  rate: number;
+  lastSync: string;
+  status: 'ok' | 'warn' | 'err';
+  own: boolean;
+}
+
+export interface Category {
+  name: string;
+  count: number;
+  share: number;
+  trend: 'up' | 'down' | 'flat';
+  pct: number;
+}
+
+export interface ActivityItem {
+  kind: string;
+  at: string;
+  text: string;
+  link: string;
+}
+
+export interface RepoModule {
+  id: string;
+  parent: string | null;
+  label: string;
+  kind: 'repo' | 'module' | 'feature' | 'orphan';
+  heat: number;
+  branchTag?: string;
+  weight?: string;
+  isOrphan?: boolean;
+}
+
+export interface GraphReview {
+  src: SourceKind;
+  sentiment: 'pos' | 'neg' | 'neu' | 'mix';
+  rating: number | null;
+  lang: string;
+  text: string;
+  tags: string[];
+  date: string;
+}
+
+export interface Proposal {
+  id: string;
+  title: string;
+  cluster: string;
+  impacted: number;
+  effort: string;
+  pri: number;
+  confidence: number;
+  column: 'pending' | 'approved' | 'in-dev' | 'rejected';
+  target: string;
+  targetLabel: string;
+  skill: string;
+  impactScore: number;
+  problem?: string;
+  proposal?: string;
+  expectedImpact?: string;
+  sources: Record<string, number>;
+  similar?: number;
+  approver?: { name: string; at: string };
+  rejectReason?: string;
+  rejector?: { name: string; at: string };
+  agent?: string;
+}
+
+export interface AgentStep {
+  label: string;
+  desc: string;
+  state: 'done' | 'active' | 'idle' | 'failed';
+  t?: string;
+}
+
+export interface AgentRun {
+  id: string;
+  proposal: string;
+  title: string;
+  branch: string;
+  status: 'running' | 'review-needed' | 'failed' | 'merged';
+  progress: number;
+  started: string;
+  eta: string;
+  issue: number;
+  skill: string;
+  steps: AgentStep[];
+  diff: { added: number; removed: number; files: number };
+  pr?: { number: number; title: string; checks: number; passing: number; merged?: boolean };
+  failedAt?: number;
+  error?: string;
+}
+
+export interface TerminalLine {
+  t: string;
+  tag: string;
+  msg: string;
+  strong?: boolean;
+}
+
 // ----- Pipeline stats (Dashboard hero) -------------------------------------
-const PIPELINE = [
+export const PIPELINE: PipelineStage[] = [
   { num: '01', name: 'Ingestion',    value: 1247, unit: 'reviews / 7d',  sub: '8 sources active', sparkData: [42, 38, 55, 61, 48, 72, 89, 102, 95, 121] },
   { num: '02', name: 'Processing',   value: 1219, unit: 'classified',    sub: '97.7% confidence', sparkData: [40, 36, 53, 60, 47, 70, 85, 99, 92, 118] },
   { num: '03', name: 'Insights',     value: 34,   unit: 'proposals',     sub: 'this week',         sparkData: [3, 5, 2, 4, 6, 8, 6] },
@@ -16,7 +141,7 @@ const PIPELINE = [
 ];
 
 // ----- Sources (Review Ingestion Layer) ------------------------------------
-const SOURCES = [
+export const SOURCES: Source[] = [
   { id: 'src_1', kind: 'appstore',  product: 'Loop',          name: 'Loop — Meeting Notes',  region: 'US, KR, JP', rate: 312, lastSync: '2m ago', status: 'ok',    own: true },
   { id: 'src_2', kind: 'playstore', product: 'Loop',          name: 'com.loop.notes',        region: 'Global',     rate: 198, lastSync: '4m ago', status: 'ok',    own: true },
   { id: 'src_3', kind: 'reddit',    product: 'Loop',          name: 'r/productivity, r/saas',region: '—',          rate: 76,  lastSync: '11m ago',status: 'ok',    own: true },
@@ -28,7 +153,7 @@ const SOURCES = [
 ];
 
 // ----- Top categories ------------------------------------------------------
-const CATEGORIES = [
+export const CATEGORIES: Category[] = [
   { name: 'Transcription quality', count: 312, share: 25.6, trend: 'up',   pct: 12 },
   { name: 'Feature request',       count: 247, share: 20.3, trend: 'up',   pct: 8  },
   { name: 'Integrations',          count: 184, share: 15.1, trend: 'flat', pct: 1  },
@@ -40,7 +165,7 @@ const CATEGORIES = [
 ];
 
 // ----- Recent activity feed ------------------------------------------------
-const ACTIVITY = [
+export const ACTIVITY: ActivityItem[] = [
   { kind: 'agent_done',   at: '2 min ago', text: 'Agent finished PR #1847 — feat: korean ASR fallback for noisy mic',  link: '#1847' },
   { kind: 'approved',     at: '14 min ago',text: 'Maya approved proposal P-238 in Slack — Microsoft Teams calendar integration', link: 'P-238' },
   { kind: 'insight',      at: '38 min ago',text: 'New insight cluster: 47 reviews about iPad split-view crash',         link: 'cluster_91' },
@@ -53,7 +178,7 @@ const ACTIVITY = [
 
 // ----- Repo modules (Processing graph) -------------------------------------
 // id, parent, label, kind, heat (review count), x/y positions for tree layout
-const MODULES = [
+export const MODULES: RepoModule[] = [
   { id: 'root',          parent: null,          label: 'loop-app',                kind: 'repo',    heat: 1219 },
 
   { id: 'transcribe',    parent: 'root',        label: 'transcribe/',             kind: 'module',  heat: 312, branchTag: 'main' },
@@ -93,7 +218,7 @@ const MODULES = [
 ];
 
 // ----- Reviews (for graph side panel) --------------------------------------
-const REVIEWS = {
+export const REVIEWS: Record<string, GraphReview[]> = {
   t_ko: [
     { src: 'appstore', sentiment: 'neg', rating: 1, lang: 'KR', text: '한국어 인식이 진짜 너무 별로예요. 회의실에서 쓰면 거의 알아듣질 못함.', tags: ['accuracy', 'noise'], date: '2h' },
     { src: 'playstore', sentiment: 'neg', rating: 2, lang: 'KR', text: 'Korean transcription confuses speakers when 2+ people talk over each other.', tags: ['diarization'], date: '5h' },
@@ -113,7 +238,7 @@ const REVIEWS = {
 };
 
 // ----- Insight / Proposal cards --------------------------------------------
-const PROPOSALS = [
+export const PROPOSALS: Proposal[] = [
   {
     id: 'P-241',
     title: 'Korean ASR fallback to denoised audio path for noisy mics',
@@ -260,7 +385,7 @@ const PROPOSALS = [
 ];
 
 // ----- Agent runs ----------------------------------------------------------
-const AGENTS = [
+export const AGENTS: AgentRun[] = [
   {
     id: 'agent_1847',
     proposal: 'P-236',
@@ -356,7 +481,7 @@ const AGENTS = [
 ];
 
 // ----- Terminal log lines (agent variant) ---------------------------------
-const TERMINAL_LINES = [
+export const TERMINAL_LINES: TerminalLine[] = [
   { t: '14:32:08', tag: 'plan',    msg: 'Reading issue #1847 — "iPad split-view crash on rotation"' },
   { t: '14:32:09', tag: 'plan',    msg: 'Loaded 21 linked reviews from cluster_92 (last 7 days)' },
   { t: '14:32:14', tag: 'plan',    msg: 'Ranked 3 root cause hypotheses. Top: AudioSession invalidation during UIKit resize. (p=0.81)' },
@@ -371,7 +496,3 @@ const TERMINAL_LINES = [
   { t: '14:37:55', tag: 'test',    msg: 'AudioSessionCoordinatorTests — 8 / 8 passed (1.4s)', strong: true },
   { t: '14:38:01', tag: 'test',    msg: 'Running full test suite... (eta ~2m)' },
 ];
-
-Object.assign(window, {
-  PIPELINE, SOURCES, CATEGORIES, ACTIVITY, MODULES, REVIEWS, PROPOSALS, AGENTS, TERMINAL_LINES,
-});

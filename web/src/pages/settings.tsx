@@ -2,10 +2,22 @@
 // Settings — integrations, infrastructure, schedules, team
 // ============================================================
 
-function SettingsPage() {
+import { Fragment, useState } from 'react';
+import type { ReactNode } from 'react';
+import { Icons, type IconName } from '../components/icons';
+import { Card, SectionHead, Badge, Button, SourceChip, Switch } from '../components/ui';
+import { useOverlays } from '../components/overlays';
+
+interface SettingsSection {
+  key: string;
+  label: string;
+  icon: IconName;
+}
+
+export function SettingsPage() {
   const [section, setSection] = useState('integrations');
 
-  const SECTIONS = [
+  const SECTIONS: SettingsSection[] = [
     { key: 'integrations', label: 'Integrations',   icon: 'Link' },
     { key: 'providers',    label: 'AI providers',   icon: 'Sparkles' },
     { key: 'pipeline',     label: 'Pipeline & skills', icon: 'Robot' },
@@ -53,21 +65,20 @@ function SettingsPage() {
   );
 }
 
-function SectionHeader({ title, sub, action }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 16 }}>
-      <div>
-        <div style={{ fontSize: 18, fontWeight: 500, color: 'var(--fg-strong)', letterSpacing: '-0.015em' }}>{title}</div>
-        {sub && <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 4, maxWidth: 560 }}>{sub}</div>}
-      </div>
-      {action}
-    </div>
-  );
-}
+// SectionHeader is replaced by SectionHead from ui.tsx + per-tab section/l-grid structure.
 
 // ----- Integrations --------------------------------------------------------
+interface Integration {
+  key: string;
+  name: string;
+  status: 'connected' | 'disconnected';
+  desc: string;
+  meta?: string;
+  logo?: ReactNode;
+  icon: ReactNode;
+}
 function IntegrationsSection() {
-  const INTS = [
+  const INTS: Integration[] = [
     { key: 'slack',  name: 'Slack',  status: 'connected',
       desc: 'Proposal cards posted to #selfheal-review. Approve, reject, comment from Slack.',
       meta: 'Loop workspace · #selfheal-review · 3 channels active',
@@ -89,92 +100,111 @@ function IntegrationsSection() {
   ];
   return (
     <Fragment>
-      <SectionHeader
-        title="Integrations"
-        sub="External services SelfHeal sends to and listens from. Slack and GitHub are required for the approval → auto-dev loop."
-      />
+      {/* === Slack approval flow === */}
+      <section className="section">
+        <SectionHead
+          eyebrow="Integrations"
+          title="Slack — approval flow"
+          action={<Badge tone="good" dot>Connected</Badge>}
+        />
+        <div className="l-grid">
+          <Card className="col-12">
+            <div style={{ padding: 18, display: 'grid', gridTemplateColumns: '1fr 280px', gap: 24 }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                  <Icons.Slack />
+                  <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--fg-strong)' }}>Slack — approval flow</div>
+                  <Badge tone="good" dot style={{ marginLeft: 'auto' }}>Connected</Badge>
+                </div>
+                <div style={{ fontSize: 12.5, color: 'var(--fg-muted)', lineHeight: 1.55, marginBottom: 14 }}>
+                  SelfHeal posts proposal cards to your team's channel. Reviewers can <code className="mono">Approve</code>, <code className="mono">Reject</code> or <code className="mono">Request changes</code> directly in Slack. Reject reasons are remembered.
+                </div>
 
-      {/* Slack feature card */}
-      <Card style={{ marginBottom: 14 }}>
-        <div style={{ padding: 18, display: 'grid', gridTemplateColumns: '1fr 280px', gap: 24 }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-              <Icons.Slack />
-              <div style={{ fontSize: 15, fontWeight: 500, color: 'var(--fg-strong)' }}>Slack — approval flow</div>
-              <Badge tone="accent" dot style={{ marginLeft: 'auto' }}>Connected</Badge>
-            </div>
-            <div style={{ fontSize: 12.5, color: 'var(--fg-muted)', lineHeight: 1.55, marginBottom: 14 }}>
-              SelfHeal posts proposal cards to your team's channel. Reviewers can <code className="mono">Approve</code>, <code className="mono">Reject</code> or <code className="mono">Request changes</code> directly in Slack. Reject reasons are remembered.
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <Setting label="Workspace" value="Loop HQ" valueMono />
-              <Setting label="Default channel" value="#selfheal-review" valueMono />
-              <Setting label="Mention reviewers" value="@product-leads, @eng-leads" />
-              <Setting label="Post threshold" value="Only proposals with confidence ≥ 0.7" />
-              <Setting label="Daily digest" value="09:00 KST · #selfheal-digest" />
-            </div>
-            <div style={{ display: 'flex', gap: 6, marginTop: 14 }}>
-              <Button leftIcon={<Icons.Eye />}>Preview message</Button>
-              <Button variant="ghost" leftIcon={<Icons.Pencil />}>Edit channels</Button>
-              <Button variant="ghost" leftIcon={<Icons.External />}>Slack admin</Button>
-            </div>
-          </div>
-
-          {/* Slack preview */}
-          <div style={{ background: 'var(--bg-soft)', border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
-            <div className="t-caps" style={{ marginBottom: 8 }}>Slack preview</div>
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: 10, fontSize: 11.5 }}>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
-                <div style={{ width: 16, height: 16, borderRadius: 4, background: 'linear-gradient(135deg, var(--accent), var(--accent-press))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, color: 'var(--accent-fg)' }}>S</div>
-                <span style={{ fontWeight: 600, color: 'var(--fg-strong)' }}>SelfHeal</span>
-                <Badge subtle style={{ fontSize: 9 }}>APP</Badge>
-                <span className="mono" style={{ fontSize: 10, color: 'var(--fg-subtle)', marginLeft: 'auto' }}>09:14</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <Setting label="Workspace" value="Loop HQ" valueMono />
+                  <Setting label="Default channel" value="#selfheal-review" valueMono />
+                  <Setting label="Mention reviewers" value="@product-leads, @eng-leads" />
+                  <Setting label="Post threshold" value="Only proposals with confidence ≥ 0.7" />
+                  <Setting label="Daily digest" value="09:00 KST · #selfheal-digest" />
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 14 }}>
+                  <Button leftIcon={<Icons.Eye />}>Preview message</Button>
+                  <Button variant="ghost" leftIcon={<Icons.Pencil />}>Edit channels</Button>
+                  <Button variant="ghost" leftIcon={<Icons.External />}>Slack admin</Button>
+                </div>
               </div>
-              <div style={{ paddingLeft: 22, color: 'var(--fg)' }}>
-                <div style={{ borderLeft: '3px solid var(--accent)', paddingLeft: 8 }}>
-                  <div style={{ fontWeight: 500, color: 'var(--fg-strong)', marginBottom: 4 }}>P-241 · Korean ASR fallback</div>
-                  <div style={{ color: 'var(--fg-muted)', lineHeight: 1.45 }}>12,345 users · 2–3 wks · P0</div>
-                  <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
-                    <div className="btn primary sm">Approve</div>
-                    <div className="btn sm" style={{ color: 'var(--danger)' }}>Reject</div>
-                    <div className="btn sm">View</div>
+
+              {/* Slack preview */}
+              <div style={{ background: 'var(--bg-soft)', border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
+                <div className="t-caps" style={{ marginBottom: 8 }}>Slack preview</div>
+                <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: 10, fontSize: 11.5 }}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+                    <div style={{ width: 16, height: 16, borderRadius: 4, background: 'linear-gradient(135deg, var(--accent), var(--accent-press))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, color: 'var(--accent-fg)' }}>S</div>
+                    <span style={{ fontWeight: 600, color: 'var(--fg-strong)' }}>SelfHeal</span>
+                    <Badge subtle style={{ fontSize: 9 }}>APP</Badge>
+                    <span className="mono" style={{ fontSize: 10, color: 'var(--fg-subtle)', marginLeft: 'auto' }}>09:14</span>
+                  </div>
+                  <div style={{ paddingLeft: 22, color: 'var(--fg)' }}>
+                    <div style={{ borderLeft: '3px solid var(--accent)', paddingLeft: 8 }}>
+                      <div style={{ fontWeight: 500, color: 'var(--fg-strong)', marginBottom: 4 }}>P-241 · Korean ASR fallback</div>
+                      <div style={{ color: 'var(--fg-muted)', lineHeight: 1.45 }}>12,345 users · 2–3 wks · P0</div>
+                      <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+                        <div className="btn primary sm">Approve</div>
+                        <div className="btn sm" style={{ color: 'var(--danger)' }}>Reject</div>
+                        <div className="btn sm">View</div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
+          </Card>
         </div>
-      </Card>
+      </section>
 
-      {/* List of others */}
-      <Card title="Other integrations">
-        <div>
-          {INTS.slice(1).map(it => (
-            <div key={it.key} style={{ display: 'grid', gridTemplateColumns: '36px 1fr auto auto', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--border)', alignItems: 'center' }}>
-              <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {it.icon}
-              </div>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-strong)' }}>{it.name}</div>
-                <div style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{it.desc}</div>
-                {it.meta && <div style={{ fontSize: 11, color: 'var(--fg-subtle)', marginTop: 3 }} className="mono">{it.meta}</div>}
-              </div>
-              {it.status === 'connected'
-                ? <Badge tone="accent" dot>Connected</Badge>
-                : <Badge subtle>Disconnected</Badge>}
-              {it.status === 'connected'
-                ? <Button size="sm" variant="ghost" leftIcon={<Icons.Cog />}>Configure</Button>
-                : <Button size="sm" leftIcon={<Icons.Plus />}>Connect</Button>}
+      {/* === Other integrations === */}
+      <section className="section">
+        <SectionHead
+          eyebrow="External"
+          title="Other integrations"
+          action={<span className="t-caps" style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>Slack and GitHub required</span>}
+        />
+        <div className="l-grid">
+          <Card className="col-12" title="Other integrations">
+            <div>
+              {INTS.slice(1).map(it => (
+                <div key={it.key} className="list-row">
+                  <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    {it.icon}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-strong)' }}>{it.name}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{it.desc}</div>
+                    {it.meta && <div style={{ fontSize: 11, color: 'var(--fg-subtle)', marginTop: 3 }} className="mono">{it.meta}</div>}
+                  </div>
+                  {it.status === 'connected'
+                    ? <Badge tone="good" dot>Connected</Badge>
+                    : <Badge subtle>Disconnected</Badge>}
+                  {it.status === 'connected'
+                    ? <Button size="sm" variant="ghost" leftIcon={<Icons.Cog />}>Configure</Button>
+                    : <Button size="sm" leftIcon={<Icons.Plus />}>Connect</Button>}
+                </div>
+              ))}
             </div>
-          ))}
+          </Card>
         </div>
-      </Card>
+      </section>
     </Fragment>
   );
 }
 
-function Setting({ label, value, valueMono, hint }) {
+interface SettingProps {
+  label: ReactNode;
+  value: ReactNode;
+  valueMono?: boolean;
+  hint?: ReactNode;
+}
+function Setting({ label, value, valueMono, hint }: SettingProps) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
       <div style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{label}</div>
@@ -184,8 +214,14 @@ function Setting({ label, value, valueMono, hint }) {
 }
 
 // ----- Pipeline & skills ---------------------------------------------------
+interface SkillRow {
+  stage: string;
+  model: string;
+  desc: string;
+  cost: string;
+}
 function PipelineSection() {
-  const SKILLS = [
+  const SKILLS: SkillRow[] = [
     { stage: '1. Filter',         model: 'claude-haiku-4-5', desc: 'Spam / ads / noise removal · cost-optimized', cost: '$0.002 / 1k reviews' },
     { stage: '2. Classify',       model: 'claude-sonnet-4-6', desc: 'Category + sentiment + priority',           cost: '$0.018 / 1k reviews' },
     { stage: '3. Cluster',        model: 'voyage-3 + pgvector', desc: 'Embeddings + k-means · weekly',           cost: '$0.005 / 1k reviews' },
@@ -194,69 +230,83 @@ function PipelineSection() {
   ];
   return (
     <Fragment>
-      <SectionHeader
-        title="Pipeline & skills"
-        sub="Each stage runs as a distinct skill. Swap models or edit prompts without redeploying."
-        action={<Button variant="primary" leftIcon={<Icons.Plus />}>Add custom skill</Button>}
-      />
-      <Card>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Stage</th>
-              <th>Model</th>
-              <th>Behaviour</th>
-              <th>Est. cost</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {SKILLS.map(s => (
-              <tr key={s.stage}>
-                <td><span className="mono" style={{ fontSize: 12 }}>{s.stage}</span></td>
-                <td><Badge tone="purple" subtle><Icons.Sparkles />{s.model}</Badge></td>
-                <td><span style={{ fontSize: 12, color: 'var(--fg)' }}>{s.desc}</span></td>
-                <td><span className="mono" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{s.cost}</span></td>
-                <td><Badge tone="accent" dot>Active</Badge></td>
-                <td>
-                  <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                    <Button size="sm" variant="ghost" leftIcon={<Icons.Pencil />}>Prompt</Button>
-                    <Button size="sm" variant="ghost" className="icon-only"><Icons.More /></Button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
+      {/* === Stage skills table === */}
+      <section className="section">
+        <SectionHead
+          eyebrow="Pipeline"
+          title="Pipeline & skills"
+          action={<Button variant="primary" leftIcon={<Icons.Plus />}>Add custom skill</Button>}
+        />
+        <div className="l-grid">
+          <Card className="col-12">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Stage</th>
+                  <th>Model</th>
+                  <th>Behaviour</th>
+                  <th>Est. cost</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {SKILLS.map(s => (
+                  <tr key={s.stage}>
+                    <td><span className="mono" style={{ fontSize: 12 }}>{s.stage}</span></td>
+                    <td><Badge tone="purple" subtle><Icons.Sparkles />{s.model}</Badge></td>
+                    <td><span style={{ fontSize: 12, color: 'var(--fg)' }}>{s.desc}</span></td>
+                    <td><span className="mono" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{s.cost}</span></td>
+                    <td><Badge tone="good" dot>Active</Badge></td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                        <Button size="sm" variant="ghost" leftIcon={<Icons.Pencil />}>Prompt</Button>
+                        <Button size="sm" variant="ghost" className="icon-only"><Icons.More /></Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      </section>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
-        <Card title="Cost optimization">
-          <div style={{ padding: 16 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <ToggleRow on label="Prompt caching" desc="Re-use system prompts. Saves ~90% on filter/classify stages." />
-              <ToggleRow on label="Batch API" desc="Bundle non-urgent inference for ~50% discount." />
-              <ToggleRow on={false} label="Spot inference window" desc="Run heavy stages only between 02:00–06:00 KST." />
+      {/* === Cost & guardrails === */}
+      <section className="section">
+        <SectionHead eyebrow="Controls" title="Optimization & guardrails" />
+        <div className="l-grid">
+          <Card className="col-6" title="Cost optimization">
+            <div className="card-pad">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <ToggleRow on label="Prompt caching" desc="Re-use system prompts. Saves ~90% on filter/classify stages." />
+                <ToggleRow on label="Batch API" desc="Bundle non-urgent inference for ~50% discount." />
+                <ToggleRow on={false} label="Spot inference window" desc="Run heavy stages only between 02:00–06:00 KST." />
+              </div>
             </div>
-          </div>
-        </Card>
-        <Card title="Guardrails">
-          <div style={{ padding: 16 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <ToggleRow on label="Stop at PR" desc="Auto-Dev never merges. Human review always required." />
-              <ToggleRow on label="Feature flag new modules" desc="Auto-create feature flag for orphan clusters." />
-              <ToggleRow on label="Test coverage gate" desc="Reject PRs that lower coverage below 75%." />
-              <ToggleRow on={false} label="Auto-retry failed agents" desc="Re-plan and retry up to 2 times on failure." />
+          </Card>
+          <Card className="col-6" title="Guardrails">
+            <div className="card-pad">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <ToggleRow on label="Stop at PR" desc="Auto-Dev never merges. Human review always required." />
+                <ToggleRow on label="Feature flag new modules" desc="Auto-create feature flag for orphan clusters." />
+                <ToggleRow on label="Test coverage gate" desc="Reject PRs that lower coverage below 75%." />
+                <ToggleRow on={false} label="Auto-retry failed agents" desc="Re-plan and retry up to 2 times on failure." />
+              </div>
             </div>
-          </div>
-        </Card>
-      </div>
+          </Card>
+        </div>
+      </section>
     </Fragment>
   );
 }
 
-function ToggleRow({ on, label, desc }) {
+interface ToggleRowProps {
+  on: boolean;
+  label: ReactNode;
+  desc: ReactNode;
+}
+function ToggleRow({ on, label, desc }: ToggleRowProps) {
   const [v, setV] = useState(on);
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems: 'center' }}>
@@ -273,21 +323,35 @@ function ToggleRow({ on, label, desc }) {
 function ScheduleSection() {
   return (
     <Fragment>
-      <SectionHeader title="Schedules" sub="When SelfHeal runs each stage of the pipeline." />
-      <Card>
-        <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <ScheduleRow stage="Review ingestion"   cadence="every 10 min"  detail="Continuous polling via API · cron" enabled />
-          <ScheduleRow stage="Classification"     cadence="streaming"     detail="Triggered per-review on ingestion" enabled />
-          <ScheduleRow stage="Clustering"         cadence="every 6h"      detail="Re-embed and re-cluster · last run 2h 18m ago" enabled />
-          <ScheduleRow stage="Insight generation" cadence="Weekly · Mon 09:00 KST" detail="Opus on top clusters · ~$8 / week" enabled />
-          <ScheduleRow stage="Slack digest"       cadence="Daily · 09:00 KST"      detail="Summary of yesterday's review trends" enabled />
+      <section className="section">
+        <SectionHead
+          eyebrow="Schedules"
+          title="Pipeline schedules"
+          action={<span className="t-caps" style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>When SelfHeal runs each stage</span>}
+        />
+        <div className="l-grid">
+          <Card className="col-12">
+            <div className="card-pad" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <ScheduleRow stage="Review ingestion"   cadence="every 10 min"  detail="Continuous polling via API · cron" enabled />
+              <ScheduleRow stage="Classification"     cadence="streaming"     detail="Triggered per-review on ingestion" enabled />
+              <ScheduleRow stage="Clustering"         cadence="every 6h"      detail="Re-embed and re-cluster · last run 2h 18m ago" enabled />
+              <ScheduleRow stage="Insight generation" cadence="Weekly · Mon 09:00 KST" detail="Opus on top clusters · ~$8 / week" enabled />
+              <ScheduleRow stage="Slack digest"       cadence="Daily · 09:00 KST"      detail="Summary of yesterday's review trends" enabled />
+            </div>
+          </Card>
         </div>
-      </Card>
+      </section>
     </Fragment>
   );
 }
 
-function ScheduleRow({ stage, cadence, detail, enabled }) {
+interface ScheduleRowProps {
+  stage: ReactNode;
+  cadence: ReactNode;
+  detail: ReactNode;
+  enabled: boolean;
+}
+function ScheduleRow({ stage, cadence, detail, enabled }: ScheduleRowProps) {
   const [v, setV] = useState(enabled);
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '180px 200px 1fr auto auto', alignItems: 'center', gap: 14 }}>
@@ -304,65 +368,82 @@ function ScheduleRow({ stage, cadence, detail, enabled }) {
 function InfraSection() {
   return (
     <Fragment>
-      <SectionHeader title="Infrastructure" sub="Where SelfHeal stores raw reviews, embeddings, and run logs." />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-        <InfraCard
-          icon={<Icons.Database />}
-          title="Vector DB"
-          desc="Stores embeddings of every review for clustering and similarity search."
-          rows={[
-            ['Provider',   'pgvector (Postgres)'],
-            ['Region',     'ap-northeast-2 (Seoul)'],
-            ['Vectors',    '1,247,318'],
-            ['Dimension',  '1024 · voyage-3'],
-          ]}
+      <section className="section">
+        <SectionHead
+          eyebrow="Infrastructure"
+          title="Storage & observability"
+          action={<span className="t-caps" style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>Where SelfHeal stores reviews, embeddings, and logs</span>}
         />
-        <InfraCard
-          icon={<Icons.Folder />}
-          title="Raw storage"
-          desc="Immutable copy of every ingested review. Used to re-cluster on prompt changes."
-          rows={[
-            ['Provider', 'AWS S3'],
-            ['Bucket',   'loop-selfheal-raw'],
-            ['Region',   'ap-northeast-2'],
-            ['Retention','Forever (lifecycle to glacier after 90d)'],
-          ]}
-        />
-        <InfraCard
-          icon={<Icons.Activity />}
-          title="Observability"
-          desc="Token usage, latency, error rates per stage."
-          rows={[
-            ['Provider',     'Datadog'],
-            ['Logs',         '~14 GB / day'],
-            ['Alerts',       '3 active'],
-            ['Dashboard',    'selfheal-overview'],
-          ]}
-        />
-        <InfraCard
-          icon={<Icons.Cog />}
-          title="Secrets"
-          desc="API keys for review sources, Slack bot, GitHub app, Anthropic."
-          rows={[
-            ['Manager',  'AWS Secrets Manager'],
-            ['Keys',     '14 stored'],
-            ['Rotation', 'Quarterly (auto)'],
-            ['Audit',    'CloudTrail · all access logged'],
-          ]}
-        />
-      </div>
+        <div className="l-grid">
+          <InfraCard
+            className="col-6"
+            icon={<Icons.Database />}
+            title="Vector DB"
+            desc="Stores embeddings of every review for clustering and similarity search."
+            rows={[
+              ['Provider',   'pgvector (Postgres)'],
+              ['Region',     'ap-northeast-2 (Seoul)'],
+              ['Vectors',    '1,247,318'],
+              ['Dimension',  '1024 · voyage-3'],
+            ]}
+          />
+          <InfraCard
+            className="col-6"
+            icon={<Icons.Folder />}
+            title="Raw storage"
+            desc="Immutable copy of every ingested review. Used to re-cluster on prompt changes."
+            rows={[
+              ['Provider', 'AWS S3'],
+              ['Bucket',   'loop-selfheal-raw'],
+              ['Region',   'ap-northeast-2'],
+              ['Retention','Forever (lifecycle to glacier after 90d)'],
+            ]}
+          />
+          <InfraCard
+            className="col-6"
+            icon={<Icons.Activity />}
+            title="Observability"
+            desc="Token usage, latency, error rates per stage."
+            rows={[
+              ['Provider',     'Datadog'],
+              ['Logs',         '~14 GB / day'],
+              ['Alerts',       '3 active'],
+              ['Dashboard',    'selfheal-overview'],
+            ]}
+          />
+          <InfraCard
+            className="col-6"
+            icon={<Icons.Cog />}
+            title="Secrets"
+            desc="API keys for review sources, Slack bot, GitHub app, Anthropic."
+            rows={[
+              ['Manager',  'AWS Secrets Manager'],
+              ['Keys',     '14 stored'],
+              ['Rotation', 'Quarterly (auto)'],
+              ['Audit',    'CloudTrail · all access logged'],
+            ]}
+          />
+        </div>
+      </section>
     </Fragment>
   );
 }
 
-function InfraCard({ icon, title, desc, rows }) {
+interface InfraCardProps {
+  icon: ReactNode;
+  title: ReactNode;
+  desc: ReactNode;
+  rows: string[][];
+  className?: string;
+}
+function InfraCard({ icon, title, desc, rows, className }: InfraCardProps) {
   return (
-    <Card>
+    <Card className={className}>
       <div style={{ padding: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 4 }}>
           {icon}
           <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-strong)' }}>{title}</div>
-          <Badge tone="accent" dot style={{ marginLeft: 'auto' }}>OK</Badge>
+          <Badge tone="good" dot style={{ marginLeft: 'auto' }}>OK</Badge>
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--fg-muted)', marginBottom: 12 }}>{desc}</div>
         <div>
@@ -393,35 +474,39 @@ function TeamSection() {
   ];
   return (
     <Fragment>
-      <SectionHeader
-        title="Team & access"
-        sub="Reviewers see proposals in Slack. Engineers can dispatch agents. Admins can change settings."
-        action={<Button variant="primary" leftIcon={<Icons.Plus />}>Invite member</Button>}
-      />
-      <Card>
-        <table className="table">
-          <thead><tr><th>Member</th><th>Role</th><th>Permissions</th><th>Last seen</th><th></th></tr></thead>
-          <tbody>
-            {TEAM.map(m => (
-              <tr key={m.email}>
-                <td>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                    <div className="avatar" style={{ background: m.role === 'Admin' ? 'linear-gradient(135deg, var(--accent), var(--accent-press))' : 'linear-gradient(135deg, var(--purple), var(--pink))' }}>{m.name.split(' ').map(x=>x[0]).join('')}</div>
-                    <div>
-                      <div style={{ fontSize: 12.5, color: 'var(--fg-strong)' }}>{m.name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--fg-muted)' }} className="mono">{m.email}</div>
-                    </div>
-                  </div>
-                </td>
-                <td><Badge subtle>{m.role}</Badge></td>
-                <td><span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{m.can}</span></td>
-                <td><span style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{m.last}</span></td>
-                <td><Button size="sm" variant="ghost" className="icon-only"><Icons.More /></Button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
+      <section className="section">
+        <SectionHead
+          eyebrow="Team"
+          title="Team & access"
+          action={<Button variant="primary" leftIcon={<Icons.Plus />}>Invite member</Button>}
+        />
+        <div className="l-grid">
+          <Card className="col-12">
+            <table className="table">
+              <thead><tr><th>Member</th><th>Role</th><th>Permissions</th><th>Last seen</th><th></th></tr></thead>
+              <tbody>
+                {TEAM.map(m => (
+                  <tr key={m.email}>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                        <div className="avatar" style={{ background: m.role === 'Admin' ? 'linear-gradient(135deg, var(--accent), var(--accent-press))' : 'linear-gradient(135deg, var(--purple), var(--pink))' }}>{m.name.split(' ').map(x=>x[0]).join('')}</div>
+                        <div>
+                          <div style={{ fontSize: 12.5, color: 'var(--fg-strong)' }}>{m.name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--fg-muted)' }} className="mono">{m.email}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td><Badge subtle>{m.role}</Badge></td>
+                    <td><span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{m.can}</span></td>
+                    <td><span style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{m.last}</span></td>
+                    <td><Button size="sm" variant="ghost" className="icon-only"><Icons.More /></Button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      </section>
     </Fragment>
   );
 }
@@ -438,32 +523,36 @@ function KeysSection() {
   ];
   return (
     <Fragment>
-      <SectionHeader
-        title="API keys"
-        sub="Stored in AWS Secrets Manager. Values are masked here and never sent to the browser at full length."
-        action={<Button variant="primary" leftIcon={<Icons.Plus />}>Add key</Button>}
-      />
-      <Card>
-        <table className="table">
-          <thead><tr><th>Service</th><th>Value</th><th>Used by</th><th>Last rotated</th><th></th></tr></thead>
-          <tbody>
-            {KEYS.map(k => (
-              <tr key={k.name}>
-                <td><span style={{ fontSize: 13, color: 'var(--fg-strong)' }}>{k.name}</span></td>
-                <td><span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{k.value}</span></td>
-                <td><span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{k.scope}</span></td>
-                <td><span style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{k.rotated}</span></td>
-                <td>
-                  <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                    <Button size="sm" variant="ghost" leftIcon={<Icons.Refresh />}>Rotate</Button>
-                    <Button size="sm" variant="ghost" className="icon-only"><Icons.More /></Button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
+      <section className="section">
+        <SectionHead
+          eyebrow="API keys"
+          title="Service credentials"
+          action={<Button variant="primary" leftIcon={<Icons.Plus />}>Add key</Button>}
+        />
+        <div className="l-grid">
+          <Card className="col-12">
+            <table className="table">
+              <thead><tr><th>Service</th><th>Value</th><th>Used by</th><th>Last rotated</th><th></th></tr></thead>
+              <tbody>
+                {KEYS.map(k => (
+                  <tr key={k.name}>
+                    <td><span style={{ fontSize: 13, color: 'var(--fg-strong)' }}>{k.name}</span></td>
+                    <td><span className="mono" style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{k.value}</span></td>
+                    <td><span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{k.scope}</span></td>
+                    <td><span style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{k.rotated}</span></td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                        <Button size="sm" variant="ghost" leftIcon={<Icons.Refresh />}>Rotate</Button>
+                        <Button size="sm" variant="ghost" className="icon-only"><Icons.More /></Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      </section>
     </Fragment>
   );
 }
@@ -471,11 +560,41 @@ function KeysSection() {
 // ============================================================
 // AI providers (Claude / Codex API + local CLIs)
 // ============================================================
+interface ProviderUsage {
+  req: string;
+  tok: string;
+  cost: string;
+}
+interface Provider {
+  id: string;
+  name: string;
+  kind: 'api' | 'cli';
+  desc: string;
+  status: 'connected' | 'disconnected' | 'detected' | 'missing';
+  logo: ReactNode;
+  meta?: string;
+  key?: string;
+  base?: string;
+  models?: string[];
+  usage?: ProviderUsage;
+  binary?: string;
+  version?: string;
+  detected?: string;
+  cwd?: string;
+  sandbox?: string;
+}
+
+interface StageRoute {
+  provider: string;
+  model: string;
+}
+type RoutingState = Record<'filter' | 'classify' | 'embed' | 'insights' | 'autodev', StageRoute>;
+
 function ProvidersSection() {
   const overlays = useOverlays();
-  const [openProvider, setOpenProvider] = useState(null);
+  const [openProvider, setOpenProvider] = useState<Provider | null>(null);
 
-  const API_PROVIDERS = [
+  const API_PROVIDERS: Provider[] = [
     {
       id: 'anthropic',
       name: 'Anthropic API',
@@ -526,7 +645,7 @@ function ProvidersSection() {
     },
   ];
 
-  const CLI_PROVIDERS = [
+  const CLI_PROVIDERS: Provider[] = [
     {
       id: 'claude-code',
       name: 'Claude Code (CLI)',
@@ -581,7 +700,7 @@ function ProvidersSection() {
   ];
 
   // Stage routing — which provider serves which pipeline stage
-  const [routing, setRouting] = useState({
+  const [routing] = useState<RoutingState>({
     filter:   { provider: 'anthropic', model: 'claude-haiku-4-5' },
     classify: { provider: 'anthropic', model: 'claude-sonnet-4-6' },
     embed:    { provider: 'voyage',    model: 'voyage-3' },
@@ -591,76 +710,81 @@ function ProvidersSection() {
 
   return (
     <Fragment>
-      <SectionHeader
-        title="AI providers"
-        sub="Wire up API keys for hosted models, or point to CLI binaries installed on this host. Per-stage routing below decides who runs what."
-        action={
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button variant="ghost" leftIcon={<Icons.Refresh />} onClick={() => overlays.toast({ title: 'Re-scanning $PATH', body: 'Found 2 CLIs in 1.2s · 1 detected, 1 missing', icon: <Icons.Refresh /> })}>Re-scan local CLIs</Button>
-            <Button variant="primary" leftIcon={<Icons.Plus />} onClick={() => overlays.toast({ title: 'Provider wizard', body: 'Choose between API endpoint, OAuth, or local binary', icon: <Icons.Plus /> })}>Add provider</Button>
-          </div>
-        }
-      />
-
-      {/* Tab-style category split */}
-      <div className="t-caps" style={{ marginTop: 22, marginBottom: 8 }}>Hosted APIs</div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-        {API_PROVIDERS.map(p => (
-          <ProviderCard key={p.id} p={p} onOpen={() => setOpenProvider(p)} />
-        ))}
-      </div>
-
-      <div className="t-caps" style={{ marginTop: 26, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-        Local CLIs
-        <Badge tone="info" subtle><Icons.Database />host: ip-10-0-32-118.ap-northeast-2</Badge>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-        {CLI_PROVIDERS.map(p => (
-          <ProviderCard key={p.id} p={p} onOpen={() => setOpenProvider(p)} />
-        ))}
-      </div>
-
-      {/* Stage routing */}
-      <div style={{ marginTop: 26 }}>
-        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 8 }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg-strong)' }}>Per-stage routing</div>
-            <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 4 }}>
-              Which provider serves each pipeline stage. Override per-skill in Pipeline & skills.
+      {/* === Hosted APIs === */}
+      <section className="section">
+        <SectionHead
+          eyebrow="AI providers"
+          title="Hosted APIs"
+          action={
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button variant="ghost" leftIcon={<Icons.Refresh />} onClick={() => overlays.toast({ title: 'Re-scanning $PATH', body: 'Found 2 CLIs in 1.2s · 1 detected, 1 missing', icon: <Icons.Refresh /> })}>Re-scan local CLIs</Button>
+              <Button variant="primary" leftIcon={<Icons.Plus />} onClick={() => overlays.toast({ title: 'Provider wizard', body: 'Choose between API endpoint, OAuth, or local binary', icon: <Icons.Plus /> })}>Add provider</Button>
             </div>
-          </div>
-          <Button size="sm" variant="ghost" leftIcon={<Icons.Refresh />} onClick={() => overlays.toast({ title: 'Reset routing', body: 'All stages back to defaults (Anthropic + Voyage)', icon: <Icons.Refresh /> })}>Reset to defaults</Button>
+          }
+        />
+        <div className="l-grid">
+          {API_PROVIDERS.map(p => (
+            <ProviderCard key={p.id} p={p} onOpen={() => setOpenProvider(p)} className="col-6" />
+          ))}
         </div>
-        <Card>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Stage</th>
-                <th>Provider</th>
-                <th>Model</th>
-                <th>Why</th>
-                <th>Est. cost / 1k items</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              <RoutingRow stage="Filter"            r={routing.filter}   why="Cheapest model, high recall on spam."      cost="$0.002" />
-              <RoutingRow stage="Classify"          r={routing.classify} why="Sonnet hits 96% F1 on category/sentiment." cost="$0.018" />
-              <RoutingRow stage="Embed (cluster)"   r={routing.embed}    why="Voyage-3 outperforms text-embedding-3."    cost="$0.005" />
-              <RoutingRow stage="Insights"          r={routing.insights} why="Opus reasons over full clusters."           cost="$0.31 / cluster" />
-              <RoutingRow stage="Auto-Dev agent"    r={routing.autodev}  why="Local CLI keeps repo on host · zero egress." cost="local · 0.4 GB egress / run" highlight />
-            </tbody>
-          </table>
-        </Card>
-      </div>
+      </section>
 
-      {/* Health strip */}
-      <div style={{ marginTop: 22, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
-        <HealthStat label="Provider uptime · 30d" v="99.94%" sub="Anthropic only — 1 incident" />
-        <HealthStat label="Local CLI runs"       v="17 / 17" sub="All succeeded · sandbox: docker" />
-        <HealthStat label="Egress (auto-dev)"     v="0 GB"   sub="CLI keeps repo on host" tone="accent" />
-        <HealthStat label="Monthly est."          v="$228"   sub="API $222 · CLI compute on host" />
-      </div>
+      {/* === Local CLIs === */}
+      <section className="section">
+        <SectionHead
+          eyebrow="AI providers"
+          title="Local CLIs"
+          action={<Badge tone="info" subtle><Icons.Database />host: ip-10-0-32-118.ap-northeast-2</Badge>}
+        />
+        <div className="l-grid">
+          {CLI_PROVIDERS.map(p => (
+            <ProviderCard key={p.id} p={p} onOpen={() => setOpenProvider(p)} className="col-6" />
+          ))}
+        </div>
+      </section>
+
+      {/* === Per-stage routing === */}
+      <section className="section">
+        <SectionHead
+          eyebrow="Routing"
+          title="Per-stage routing"
+          action={<Button size="sm" variant="ghost" leftIcon={<Icons.Refresh />} onClick={() => overlays.toast({ title: 'Reset routing', body: 'All stages back to defaults (Anthropic + Voyage)', icon: <Icons.Refresh /> })}>Reset to defaults</Button>}
+        />
+        <div className="l-grid">
+          <Card className="col-12">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Stage</th>
+                  <th>Provider</th>
+                  <th>Model</th>
+                  <th>Why</th>
+                  <th>Est. cost / 1k items</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <RoutingRow stage="Filter"            r={routing.filter}   why="Cheapest model, high recall on spam."      cost="$0.002" />
+                <RoutingRow stage="Classify"          r={routing.classify} why="Sonnet hits 96% F1 on category/sentiment." cost="$0.018" />
+                <RoutingRow stage="Embed (cluster)"   r={routing.embed}    why="Voyage-3 outperforms text-embedding-3."    cost="$0.005" />
+                <RoutingRow stage="Insights"          r={routing.insights} why="Opus reasons over full clusters."           cost="$0.31 / cluster" />
+                <RoutingRow stage="Auto-Dev agent"    r={routing.autodev}  why="Local CLI keeps repo on host · zero egress." cost="local · 0.4 GB egress / run" highlight />
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      </section>
+
+      {/* === Health stats === */}
+      <section className="section">
+        <SectionHead eyebrow="Health" title="Provider health" />
+        <div className="l-grid">
+          <HealthStat className="col-3" label="Provider uptime · 30d" v="99.94%" sub="Anthropic only — 1 incident" />
+          <HealthStat className="col-3" label="Local CLI runs"       v="17 / 17" sub="All succeeded · sandbox: docker" />
+          <HealthStat className="col-3" label="Egress (auto-dev)"     v="0 GB"   sub="CLI keeps repo on host" tone="accent" />
+          <HealthStat className="col-3" label="Monthly est."          v="$228"   sub="API $222 · CLI compute on host" />
+        </div>
+      </section>
 
       {openProvider && (
         <ProviderDetailModal p={openProvider} onClose={() => setOpenProvider(null)} />
@@ -670,9 +794,14 @@ function ProvidersSection() {
 }
 
 // ----- Provider card -------------------------------------------------------
-function ProviderCard({ p, onOpen }) {
-  const tone =
-    p.status === 'connected' ? 'accent' :
+interface ProviderCardProps {
+  p: Provider;
+  onOpen: () => void;
+  className?: string;
+}
+function ProviderCard({ p, onOpen, className }: ProviderCardProps) {
+  const tone: 'accent' | 'good' | 'warn' | 'danger' | null =
+    p.status === 'connected' ? 'good' :
     p.status === 'detected'  ? 'warn'   :
     p.status === 'missing'   ? 'danger' :
     null;
@@ -683,7 +812,7 @@ function ProviderCard({ p, onOpen }) {
     'Disconnected';
 
   return (
-    <div className="card" onClick={onOpen} style={{ cursor: 'pointer', padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div className={`card${className ? ` ${className}` : ''}`} onClick={onOpen} style={{ cursor: 'pointer', padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <div style={{
           width: 32, height: 32, borderRadius: 8,
@@ -711,7 +840,7 @@ function ProviderCard({ p, onOpen }) {
             <DataRow k="Endpoint" v={p.base} mono />
             <DataRow k="Models"   v={
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                {p.models.map(m => <Badge subtle key={m} style={{ fontSize: 10 }}><Icons.Sparkles />{m}</Badge>)}
+                {(p.models ?? []).map(m => <Badge subtle key={m} style={{ fontSize: 10 }}><Icons.Sparkles />{m}</Badge>)}
               </div>
             } />
           </Fragment>
@@ -749,7 +878,13 @@ function ProviderCard({ p, onOpen }) {
   );
 }
 
-function DataRow({ k, v, mono, mask }) {
+interface DataRowProps {
+  k: ReactNode;
+  v: ReactNode;
+  mono?: boolean;
+  mask?: boolean;
+}
+function DataRow({ k, v, mono, mask }: DataRowProps) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: 8, padding: '2px 0', alignItems: 'center' }}>
       <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{k}</div>
@@ -761,7 +896,11 @@ function DataRow({ k, v, mono, mask }) {
   );
 }
 
-function UsagePill({ l, v }) {
+interface UsagePillProps {
+  l: ReactNode;
+  v: ReactNode;
+}
+function UsagePill({ l, v }: UsagePillProps) {
   return (
     <div style={{ background: 'var(--surface-2)', borderRadius: 4, padding: '5px 8px' }}>
       <div style={{ fontSize: 9.5, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: 0.04 }}>{l}</div>
@@ -770,12 +909,19 @@ function UsagePill({ l, v }) {
   );
 }
 
-function HealthStat({ label, v, sub, tone }) {
+interface HealthStatProps {
+  label: ReactNode;
+  v: ReactNode;
+  sub: ReactNode;
+  tone?: string;
+  className?: string;
+}
+function HealthStat({ label, v, sub, tone, className }: HealthStatProps) {
   return (
-    <Card pad>
+    <Card pad className={className}>
       <div className="t-caps">{label}</div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-        <div style={{ fontSize: 22, fontWeight: 500 }} className={`mono ${tone === 'accent' ? 'fg-accent' : 'fg-strong'}`}>{v}</div>
+        <div style={{ fontSize: 22, fontWeight: 500 }} className={`mono ${tone === 'good' ? 'fg-good' : tone === 'accent' ? 'fg-accent' : 'fg-strong'}`}>{v}</div>
       </div>
       <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>{sub}</div>
     </Card>
@@ -783,7 +929,14 @@ function HealthStat({ label, v, sub, tone }) {
 }
 
 // ----- Routing row ---------------------------------------------------------
-function RoutingRow({ stage, r, why, cost, highlight }) {
+interface RoutingRowProps {
+  stage: string;
+  r: StageRoute;
+  why: ReactNode;
+  cost: ReactNode;
+  highlight?: boolean;
+}
+function RoutingRow({ stage, r, why, cost, highlight }: RoutingRowProps) {
   const overlays = useOverlays();
   const isCli = r.provider === 'claude-code' || r.provider === 'codex-cli';
   const provLabel =
@@ -794,7 +947,7 @@ function RoutingRow({ stage, r, why, cost, highlight }) {
     r.provider === 'codex-cli'   ? 'Codex CLI' :
     r.provider;
   return (
-    <tr style={highlight ? { background: 'var(--accent-soft)' } : null}>
+    <tr style={highlight ? { background: 'var(--accent-soft)' } : undefined}>
       <td><span style={{ fontSize: 13, color: 'var(--fg-strong)', fontWeight: 500 }}>{stage}</span></td>
       <td>
         <Badge tone={isCli ? 'info' : 'accent'} subtle>
@@ -816,7 +969,11 @@ function RoutingRow({ stage, r, why, cost, highlight }) {
 }
 
 // ----- Provider detail modal ----------------------------------------------
-function ProviderDetailModal({ p, onClose }) {
+interface ProviderDetailModalProps {
+  p: Provider;
+  onClose: () => void;
+}
+function ProviderDetailModal({ p, onClose }: ProviderDetailModalProps) {
   const overlays = useOverlays();
   const isCli = p.kind === 'cli';
   return (
@@ -976,7 +1133,12 @@ function ProviderDetailModal({ p, onClose }) {
   );
 }
 
-function FormRow2({ label, hint, children }) {
+interface FormRow2Props {
+  label: ReactNode;
+  hint?: ReactNode;
+  children?: ReactNode;
+}
+function FormRow2({ label, hint, children }: FormRow2Props) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 14, alignItems: 'start' }}>
       <div>
@@ -987,5 +1149,3 @@ function FormRow2({ label, hint, children }) {
     </div>
   );
 }
-
-window.SettingsPage = SettingsPage;

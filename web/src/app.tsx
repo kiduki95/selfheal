@@ -2,7 +2,42 @@
 // SelfHeal — App shell (sidebar, topbar, router)
 // ============================================================
 
-const NAV = [
+import { Fragment, useEffect, useRef, useState } from 'react';
+import type { Route } from './types';
+import { Icons } from './components/icons';
+import type { IconName } from './components/icons';
+import { Button, ToastProvider } from './components/ui';
+import { OverlayProvider, useOverlays } from './components/overlays';
+import { DashboardPage } from './pages/dashboard';
+import { SourcesPage } from './pages/sources';
+import { ReviewsPage } from './pages/reviews';
+import { ProcessingPage } from './pages/processing';
+import { InsightsPage } from './pages/insights';
+import { AgentPage } from './pages/agent';
+import { ActivityPage } from './pages/activity';
+import { SettingsPage } from './pages/settings';
+import { OnboardingFlow } from './pages/onboarding';
+
+type ThemeMode = 'dark' | 'light';
+
+interface NavItem {
+  id: Route;
+  label: string;
+  icon: IconName;
+  badge?: string;
+  badgeAccent?: boolean;
+}
+interface NavSection {
+  section: string;
+  items: NavItem[];
+}
+interface PageMeta {
+  crumbs: string[];
+  title: string;
+  sub: string;
+}
+
+const NAV: NavSection[] = [
   { section: 'Operate', items: [
     { id: 'dashboard',  label: 'Dashboard',   icon: 'Home' },
     { id: 'sources',    label: 'Sources',     icon: 'Inbox',   badge: '8' },
@@ -19,7 +54,7 @@ const NAV = [
   ]},
 ];
 
-const PAGE_META = {
+const PAGE_META: Record<Route, PageMeta> = {
   dashboard:  { crumbs: ['Loop', 'Dashboard'],                title: 'Dashboard',                sub: 'Last 7 days · loop-app · main branch · auto-sync on' },
   sources:    { crumbs: ['Loop', 'Sources'],                  title: 'Review sources',           sub: 'Where SelfHeal listens for user feedback — own apps and competitors.' },
   reviews:    { crumbs: ['Loop', 'Reviews'],                  title: 'Raw reviews',              sub: 'Every review ingested in the last 24 hours, with full AI classification & mapping.' },
@@ -30,7 +65,11 @@ const PAGE_META = {
   settings:   { crumbs: ['Loop', 'Settings'],                 title: 'Settings',                 sub: 'Integrations, infrastructure, and team configuration.' },
 };
 
-function Sidebar({ route, setRoute, openOnboarding }) {
+function Sidebar({ route, setRoute, openOnboarding }: {
+  route: Route;
+  setRoute: (r: Route) => void;
+  openOnboarding: () => void;
+}) {
   const overlays = useOverlays();
   return (
     <aside className="sidebar">
@@ -89,11 +128,14 @@ function Sidebar({ route, setRoute, openOnboarding }) {
   );
 }
 
-function Topbar({ route, themeMode, setThemeMode }) {
+function Topbar({ route, themeMode, setThemeMode }: {
+  route: Route;
+  themeMode: ThemeMode;
+  setThemeMode: (v: ThemeMode) => void;
+}) {
   const meta = PAGE_META[route];
   const overlays = useOverlays();
-  const bellRef = useRef(null);
-  const dateRef = useRef(null);
+  const bellRef = useRef<HTMLButtonElement>(null);
   return (
     <div className="topbar">
       <div className="crumbs">
@@ -115,7 +157,7 @@ function Topbar({ route, themeMode, setThemeMode }) {
         <Button variant="ghost" className="icon-only" onClick={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')} title="Toggle theme">
           {themeMode === 'dark' ? <Icons.Sun /> : <Icons.Moon />}
         </Button>
-        <button ref={bellRef} className="btn ghost icon-only" title="Notifications" onClick={() => overlays.openNotifs(bellRef.current.getBoundingClientRect())} style={{ position: 'relative' }}>
+        <button ref={bellRef} className="btn ghost icon-only" title="Notifications" onClick={() => overlays.openNotifs(bellRef.current?.getBoundingClientRect())} style={{ position: 'relative' }}>
           <Icons.Bell />
           <span style={{ position: 'absolute', top: 5, right: 6, width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)', boxShadow: '0 0 0 2px var(--bg)' }} />
         </button>
@@ -126,16 +168,15 @@ function Topbar({ route, themeMode, setThemeMode }) {
 
 // ----------------------------------------------------------------------------
 
-function App() {
-  const defaults = window.__TWEAK_DEFAULTS;
-  const [tweaks, setTweak] = useTweaks(defaults);
-  const [route, setRoute] = useState('dashboard');
+export function App() {
+  const [theme, setTheme] = useState<ThemeMode>('dark');
+  const [route, setRoute] = useState<Route>('dashboard');
   const [showOnboarding, setShowOnboarding] = useState(false);
 
   // Apply theme to <html>
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', tweaks.theme || 'dark');
-  }, [tweaks.theme]);
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
 
   // Listen for command-palette "open wizard" event
   useEffect(() => {
@@ -143,44 +184,6 @@ function App() {
     window.addEventListener('selfheal:open-wizard', onOpen);
     return () => window.removeEventListener('selfheal:open-wizard', onOpen);
   }, []);
-
-  // Tweaks panel content
-  const renderTweaks = () => (
-    <Fragment>
-      <TweakSection title="Theme">
-        <TweakRadio
-          label="Mode"
-          value={tweaks.theme}
-          options={[{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]}
-          onChange={(v) => setTweak('theme', v)}
-        />
-      </TweakSection>
-      <TweakSection title="Processing graph">
-        <TweakRadio
-          label="Layout"
-          value={tweaks.graphStyle}
-          options={[
-            { value: 'tree',  label: 'Tree' },
-            { value: 'radial',label: 'Radial' },
-            { value: 'force', label: 'Force' },
-          ]}
-          onChange={(v) => setTweak('graphStyle', v)}
-        />
-      </TweakSection>
-      <TweakSection title="Agent cards">
-        <TweakRadio
-          label="Style"
-          value={tweaks.agentCardStyle}
-          options={[
-            { value: 'timeline', label: 'Timeline' },
-            { value: 'terminal', label: 'Terminal' },
-            { value: 'compact',  label: 'Compact' },
-          ]}
-          onChange={(v) => setTweak('agentCardStyle', v)}
-        />
-      </TweakSection>
-    </Fragment>
-  );
 
   const meta = PAGE_META[route];
 
@@ -190,10 +193,10 @@ function App() {
         <div className="app">
           <Sidebar route={route} setRoute={setRoute} openOnboarding={() => setShowOnboarding(true)} />
           <div className="main">
-            <Topbar route={route} themeMode={tweaks.theme} setThemeMode={(v) => setTweak('theme', v)} />
+            <Topbar route={route} themeMode={theme} setThemeMode={setTheme} />
             <div className="content">
               <div className="page" data-screen-label={`page-${route}`}>
-                {route !== 'settings' && route !== 'onboarding' && (
+                {route !== 'settings' && (
                   <div className="page-header">
                     <div className="page-title-row">
                       <div className="page-title">{meta.title}</div>
@@ -206,9 +209,9 @@ function App() {
                 {route === 'dashboard'  && <DashboardPage  setRoute={setRoute} />}
                 {route === 'sources'    && <SourcesPage />}
                 {route === 'reviews'    && <ReviewsPage />}
-                {route === 'processing' && <ProcessingPage graphStyle={tweaks.graphStyle} />}
+                {route === 'processing' && <ProcessingPage graphStyle="tree" />}
                 {route === 'insights'   && <InsightsPage />}
-                {route === 'agent'      && <AgentPage cardStyle={tweaks.agentCardStyle} />}
+                {route === 'agent'      && <AgentPage cardStyle="timeline" />}
                 {route === 'activity'   && <ActivityPage />}
                 {route === 'settings'   && <SettingsPage />}
               </div>
@@ -216,21 +219,19 @@ function App() {
           </div>
 
           {showOnboarding && <OnboardingFlow onClose={() => setShowOnboarding(false)} />}
-
-          <TweaksPanel>{renderTweaks()}</TweaksPanel>
         </div>
       </OverlayProvider>
     </ToastProvider>
   );
 }
 
-function PageActions({ route, setRoute }) {
+function PageActions({ route, setRoute }: { route: Route; setRoute: (r: Route) => void }) {
   const overlays = useOverlays();
   if (route === 'dashboard') {
     return (
       <div className="page-actions">
         <Button variant="ghost" leftIcon={<Icons.Calendar />} onClick={(e) => overlays.openDateRange(e.currentTarget.getBoundingClientRect())}>Last 7 days</Button>
-        <Button leftIcon={<Icons.Refresh />} onClick={() => overlays.toast({ title: 'Refreshed', body: 'Pipeline stats re-fetched · 1.2s', icon: <Icons.Check /> })}>Refresh</Button>
+        <Button leftIcon={<Icons.Refresh />} onClick={() => overlays.toast?.({ title: 'Refreshed', body: 'Pipeline stats re-fetched · 1.2s', icon: <Icons.Check /> })}>Refresh</Button>
         <Button variant="primary" leftIcon={<Icons.Sparkles />} onClick={() => setRoute('insights')}>Review proposals</Button>
       </div>
     );
@@ -247,7 +248,7 @@ function PageActions({ route, setRoute }) {
     return (
       <div className="page-actions">
         <Button variant="ghost" leftIcon={<Icons.Calendar />} onClick={(e) => overlays.openDateRange(e.currentTarget.getBoundingClientRect())}>Last 24 h</Button>
-        <Button variant="ghost" leftIcon={<Icons.External />} onClick={() => overlays.toast({ title: 'Export started', body: '487 reviews → CSV · download ready in ~10s', icon: <Icons.External /> })}>Export CSV</Button>
+        <Button variant="ghost" leftIcon={<Icons.External />} onClick={() => overlays.toast?.({ title: 'Export started', body: '487 reviews → CSV · download ready in ~10s', icon: <Icons.External /> })}>Export CSV</Button>
       </div>
     );
   }
@@ -255,7 +256,7 @@ function PageActions({ route, setRoute }) {
     return (
       <div className="page-actions">
         <Button variant="ghost" leftIcon={<Icons.Calendar />} onClick={(e) => overlays.openDateRange(e.currentTarget.getBoundingClientRect())}>Last 24 h</Button>
-        <Button variant="ghost" leftIcon={<Icons.External />} onClick={() => overlays.toast({ title: 'Audit export queued', body: '142 events · JSON · emailed to maya@loop.app', icon: <Icons.External /> })}>Export audit</Button>
+        <Button variant="ghost" leftIcon={<Icons.External />} onClick={() => overlays.toast?.({ title: 'Audit export queued', body: '142 events · JSON · emailed to maya@loop.app', icon: <Icons.External /> })}>Export audit</Button>
       </div>
     );
   }
@@ -263,7 +264,7 @@ function PageActions({ route, setRoute }) {
     return (
       <div className="page-actions">
         <Button variant="ghost" leftIcon={<Icons.Calendar />} onClick={(e) => overlays.openDateRange(e.currentTarget.getBoundingClientRect())}>Last 7 days</Button>
-        <Button leftIcon={<Icons.External />} onClick={() => overlays.toast({ title: 'Opening GitHub', body: 'loop/loop-app · main · a3f9c1d', icon: <Icons.Github /> })}>Open in GitHub</Button>
+        <Button leftIcon={<Icons.External />} onClick={() => overlays.toast?.({ title: 'Opening GitHub', body: 'loop/loop-app · main · a3f9c1d', icon: <Icons.Github /> })}>Open in GitHub</Button>
       </div>
     );
   }
@@ -276,7 +277,7 @@ function PageActions({ route, setRoute }) {
           title: 'Regenerate insights now?',
           body: 'Runs claude-opus-4-7 against the top 12 clusters. Costs ~$3 and replaces this week\'s draft proposals. The next scheduled run (Mon 09:00 KST) will still happen.',
           confirmLabel: 'Regenerate now',
-          onConfirm: () => overlays.toast({ title: 'Regenerating insights', body: '12 clusters · claude-opus-4-7 · eta ~2 min', icon: <Icons.Sparkles /> }),
+          onConfirm: () => overlays.toast?.({ title: 'Regenerating insights', body: '12 clusters · claude-opus-4-7 · eta ~2 min', icon: <Icons.Sparkles /> }),
         })}>Regenerate insights</Button>
       </div>
     );
@@ -289,13 +290,10 @@ function PageActions({ route, setRoute }) {
           title: 'Pause Auto-Dev queue?',
           body: 'Running agents will finish their current step then halt. Queued runs won\'t start until you resume. Reviewers can still approve proposals.',
           confirmLabel: 'Pause queue',
-          onConfirm: () => overlays.toast({ title: 'Queue paused', body: '4 agents halting after current step', icon: <Icons.Pause /> }),
+          onConfirm: () => overlays.toast?.({ title: 'Queue paused', body: '4 agents halting after current step', icon: <Icons.Pause /> }),
         })}>Pause queue</Button>
       </div>
     );
   }
   return null;
 }
-
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<App />);

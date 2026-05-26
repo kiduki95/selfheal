@@ -3,36 +3,84 @@
 // ============================================================
 // One provider owns the overlay state. Pages call into context.
 
-const OverlayCtx = React.createContext(null);
-const useOverlays = () => React.useContext(OverlayCtx);
+import { useState, useEffect, useRef, useMemo, useContext, createContext, Fragment } from 'react';
+import type { ReactNode } from 'react';
+import { Icons } from './icons';
+import type { IconName } from './icons';
+import { Badge, Button, PriDot, SourceChip, useToast } from './ui';
+import { PROPOSALS } from '../data/mock';
+import type { Proposal } from '../data/mock';
+import type { Route } from '../types';
 
-function OverlayProvider({ children, setRoute }) {
+// Anchor passed to popovers: a measured rect, or `true` when no rect available.
+type Anchor = DOMRect | true;
+
+export interface ConfirmOptions {
+  title: string;
+  body?: ReactNode;
+  danger?: boolean;
+  confirmLabel?: string;
+  onConfirm?: () => void;
+}
+
+export interface Toast {
+  title: string;
+  body?: string;
+  icon?: ReactNode;
+  duration?: number;
+}
+
+export interface OverlayContextValue {
+  openPalette: () => void;
+  openNotifs: (rect?: Anchor) => void;
+  openUserMenu: (rect?: Anchor) => void;
+  openAddSource: () => void;
+  openSlack: (proposalId: string) => void;
+  openDateRange: (rect?: Anchor) => void;
+  confirm: (opts: ConfirmOptions) => void;
+  toast: (t: Toast) => void;
+  navigate: (r: Route) => void;
+}
+
+const OverlayCtx = createContext<OverlayContextValue | null>(null);
+const useOverlays = (): OverlayContextValue => {
+  const ctx = useContext(OverlayCtx);
+  if (!ctx) throw new Error('useOverlays must be used within <OverlayProvider>');
+  return ctx;
+};
+
+interface OverlayProviderProps {
+  children?: ReactNode;
+  setRoute: (r: Route) => void;
+}
+
+function OverlayProvider({ children, setRoute }: OverlayProviderProps) {
   const [palette,     setPalette]     = useState(false);
-  const [notifs,      setNotifs]      = useState(false);
-  const [userMenu,    setUserMenu]    = useState(false);
+  const [notifs,      setNotifs]      = useState<Anchor | false>(false);
+  const [userMenu,    setUserMenu]    = useState<Anchor | false>(false);
   const [addSource,   setAddSource]   = useState(false);
-  const [slackThread, setSlackThread] = useState(null); // proposalId or null
-  const [dateRange,   setDateRange]   = useState(null); // anchorRect or null
-  const [confirm,     setConfirm]     = useState(null); // { title, body, danger, onConfirm }
+  const [slackThread, setSlackThread] = useState<string | null>(null); // proposalId or null
+  const [dateRange,   setDateRange]   = useState<Anchor | false>(false); // anchorRect or null
+  const [confirm,     setConfirm]     = useState<ConfirmOptions | null>(null); // { title, body, danger, onConfirm }
   const toast = useToast();
 
   // ⌘K to open palette
   useEffect(() => {
-    const onKey = (e) => {
+    const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setPalette(p => !p);
       }
       if (e.key === 'Escape') {
         setPalette(false); setNotifs(false); setUserMenu(false);
-        setAddSource(false); setSlackThread(null); setDateRange(null); setConfirm(null);
+        setAddSource(false); setSlackThread(null); setDateRange(false); setConfirm(null);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const api = useMemo(() => ({
+  const api = useMemo<OverlayContextValue>(() => ({
     openPalette:    () => setPalette(true),
     openNotifs:     (rect) => setNotifs(rect || true),
     openUserMenu:   (rect) => setUserMenu(rect || true),
@@ -61,16 +109,32 @@ function OverlayProvider({ children, setRoute }) {
 // ===========================================================================
 // Command palette (⌘K)
 // ===========================================================================
-function CommandPalette({ onClose, setRoute }) {
+type PaletteItemKind = 'page' | 'action' | 'proposal';
+
+interface PaletteItem {
+  kind: PaletteItemKind;
+  id: string;
+  label: string;
+  icon: string;
+  section: string;
+  sub?: string;
+}
+
+interface CommandPaletteProps {
+  onClose: () => void;
+  setRoute: (r: Route) => void;
+}
+
+function CommandPalette({ onClose, setRoute }: CommandPaletteProps) {
   const [q, setQ] = useState('');
   const [activeIdx, setActiveIdx] = useState(0);
-  const inputRef = useRef(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
   // Items: pages, quick actions, proposals, reviews
-  const allItems = useMemo(() => {
-    const items = [
+  const allItems = useMemo<PaletteItem[]>(() => {
+    const items: PaletteItem[] = [
       // Pages
       { kind: 'page',   id: 'dashboard',  label: 'Dashboard',     icon: 'Home',     section: 'Jump to' },
       { kind: 'page',   id: 'sources',    label: 'Sources',       icon: 'Inbox',    section: 'Jump to' },
@@ -90,7 +154,7 @@ function CommandPalette({ onClose, setRoute }) {
       { kind: 'action', id: 'open-wizard',    label: 'Re-run setup wizard',         icon: 'Lightning',section: 'Actions' },
 
       // Proposals
-      ...PROPOSALS.slice(0, 6).map(p => ({
+      ...PROPOSALS.slice(0, 6).map((p): PaletteItem => ({
         kind: 'proposal', id: p.id, label: p.title, sub: `${p.id} · ${p.targetLabel}`,
         icon: 'Sparkles', section: 'Proposals',
       })),
@@ -106,7 +170,7 @@ function CommandPalette({ onClose, setRoute }) {
 
   // Group by section, preserving order
   const grouped = useMemo(() => {
-    const map = {};
+    const map: Record<string, PaletteItem[]> = {};
     allItems.forEach(it => {
       (map[it.section] = map[it.section] || []).push(it);
     });
@@ -118,8 +182,8 @@ function CommandPalette({ onClose, setRoute }) {
 
   useEffect(() => { setActiveIdx(0); }, [q]);
 
-  const doAction = (it) => {
-    if (it.kind === 'page') { setRoute(it.id); onClose(); return; }
+  const doAction = (it: PaletteItem) => {
+    if (it.kind === 'page') { setRoute(it.id as Route); onClose(); return; }
     if (it.kind === 'proposal') { setRoute('insights'); onClose(); return; }
     if (it.kind === 'action') {
       if (it.id === 'add-source') { setRoute('sources'); onClose(); return; }
@@ -129,7 +193,6 @@ function CommandPalette({ onClose, setRoute }) {
       if (it.id === 'toggle-theme') {
         const cur = document.documentElement.getAttribute('data-theme');
         const next = cur === 'dark' ? 'light' : 'dark';
-        window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { theme: next } }, '*');
         document.documentElement.setAttribute('data-theme', next);
         onClose(); return;
       }
@@ -137,7 +200,7 @@ function CommandPalette({ onClose, setRoute }) {
     }
   };
 
-  const onKey = (e) => {
+  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx(i => Math.min(flat.length - 1, i + 1)); }
     if (e.key === 'ArrowUp')   { e.preventDefault(); setActiveIdx(i => Math.max(0, i - 1)); }
     if (e.key === 'Enter')     { e.preventDefault(); if (flat[activeIdx]) doAction(flat[activeIdx]); }
@@ -179,7 +242,7 @@ function CommandPalette({ onClose, setRoute }) {
               <div className="t-caps" style={{ padding: '8px 14px 4px' }}>{section}</div>
               {items.map((it) => {
                 const idx = flat.indexOf(it);
-                const Ic = Icons[it.icon];
+                const Ic = Icons[it.icon as IconName];
                 return (
                   <div
                     key={it.kind + '-' + it.id}
@@ -228,7 +291,12 @@ function CommandPalette({ onClose, setRoute }) {
 // ===========================================================================
 // Notifications panel — anchored to bell
 // ===========================================================================
-function NotificationsPanel({ anchor, onClose }) {
+interface NotificationsPanelProps {
+  anchor: Anchor | false;
+  onClose: () => void;
+}
+
+function NotificationsPanel({ anchor, onClose }: NotificationsPanelProps) {
   const rect = anchor && typeof anchor === 'object' ? anchor : null;
   const NOTIFS = [
     { kind: 'review',   t: '2 min',  text: 'P-241 needs approval', sub: 'Korean ASR fallback · 12,345 users impacted', tone: 'accent', icon: 'Sparkles' },
@@ -236,7 +304,7 @@ function NotificationsPanel({ anchor, onClose }) {
     { kind: 'fail',     t: '14 min', text: 'agent_1832 failed', sub: 'Flaky test in integrations/notion/sync_test.ts:128', tone: 'danger', icon: 'AlertTri' },
     { kind: 'cluster',  t: '38 min', text: 'New orphan cluster detected', sub: 'cluster_92 · iPad split-view crash · 47 reviews', tone: 'warn', icon: 'Layers' },
     { kind: 'review',   t: '1 h',    text: 'Daniel rejected P-235', sub: 'Out of scope for Q1', tone: 'danger', icon: 'X' },
-    { kind: 'agent',    t: '3 h',    text: 'PR #1841 merged', sub: 'fix: summary truncation for >90min meetings', tone: 'accent', icon: 'Check' },
+    { kind: 'agent',    t: '3 h',    text: 'PR #1841 merged', sub: 'fix: summary truncation for >90min meetings', tone: 'good', icon: 'Check' },
   ];
   return (
     <Fragment>
@@ -261,7 +329,7 @@ function NotificationsPanel({ anchor, onClose }) {
         </div>
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {NOTIFS.map((n, i) => {
-            const Ic = Icons[n.icon];
+            const Ic = Icons[n.icon as IconName];
             const toneVar = `var(--${n.tone})`;
             return (
               <div key={i} style={{
@@ -297,9 +365,14 @@ function NotificationsPanel({ anchor, onClose }) {
 // ===========================================================================
 // User menu — anchored to sidebar user chip
 // ===========================================================================
-function UserMenuPopover({ anchor, onClose }) {
+interface UserMenuPopoverProps {
+  anchor: Anchor | false;
+  onClose: () => void;
+}
+
+function UserMenuPopover({ anchor, onClose }: UserMenuPopoverProps) {
   const rect = anchor && typeof anchor === 'object' ? anchor : null;
-  const items = [
+  const items: { l: string; ic?: string; sub?: string; danger?: boolean }[] = [
     { l: 'Profile settings',   ic: 'Cog' },
     { l: 'Notification prefs', ic: 'Bell' },
     { l: 'Keyboard shortcuts', ic: 'Cmd' },
@@ -335,7 +408,7 @@ function UserMenuPopover({ anchor, onClose }) {
         </div>
         {items.map((it, i) => {
           if (it.l === 'divider') return <div key={i} className="divider" style={{ margin: '4px 0' }} />;
-          const Ic = Icons[it.ic] || Icons.ChevRight;
+          const Ic = Icons[it.ic as IconName] || Icons.ChevRight;
           return (
             <div key={i} onClick={onClose} style={{
               display: 'flex', alignItems: 'center', gap: 9, padding: '7px 10px',
@@ -362,9 +435,13 @@ function UserMenuPopover({ anchor, onClose }) {
 // ===========================================================================
 // Add source modal — pick → configure → confirm
 // ===========================================================================
-function AddSourceModal({ onClose }) {
+interface AddSourceModalProps {
+  onClose: () => void;
+}
+
+function AddSourceModal({ onClose }: AddSourceModalProps) {
   const [step, setStep] = useState(0);
-  const [kind, setKind] = useState(null);
+  const [kind, setKind] = useState<string | null>(null);
   const [opts, setOpts] = useState({ region: 'Global', product: 'Loop', polling: '10 min' });
   const toast = useToast();
 
@@ -380,7 +457,7 @@ function AddSourceModal({ onClose }) {
   ];
 
   const finish = () => {
-    toast({ title: 'Source connected', body: `${KINDS.find(k => k.k === kind)?.l} added — first sync in ~30s`, icon: <Icons.Check /> });
+    toast?.({ title: 'Source connected', body: `${KINDS.find(k => k.k === kind)?.l} added — first sync in ~30s`, icon: <Icons.Check /> });
     onClose();
   };
 
@@ -495,7 +572,13 @@ function AddSourceModal({ onClose }) {
   );
 }
 
-function FieldRow({ label, hint, children }) {
+interface FieldRowProps {
+  label: ReactNode;
+  hint?: ReactNode;
+  children?: ReactNode;
+}
+
+function FieldRow({ label, hint, children }: FieldRowProps) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 14, alignItems: 'start' }}>
       <div>
@@ -510,9 +593,25 @@ function FieldRow({ label, hint, children }) {
 // ===========================================================================
 // Slack thread modal — peek at the discussion on a proposal
 // ===========================================================================
-function SlackThreadModal({ proposalId, onClose }) {
+interface SlackMessage {
+  u: string;
+  isBot?: boolean;
+  t?: string;
+  ts?: string;
+  body: string;
+  card?: Proposal;
+  isSystem?: boolean;
+  reactions?: [string, number][];
+}
+
+interface SlackThreadModalProps {
+  proposalId: string;
+  onClose: () => void;
+}
+
+function SlackThreadModal({ proposalId, onClose }: SlackThreadModalProps) {
   const p = PROPOSALS.find(x => x.id === proposalId) || PROPOSALS[0];
-  const messages = [
+  const messages: SlackMessage[] = [
     { u: 'SelfHeal', isBot: true, t: '09:14', body: 'bot-card', card: p },
     { u: 'Maya Ortiz',   ts: '09:18', body: "P0 on the Korean ASR — we've been bleeding accounts in KR for a month. Approving." },
     { u: 'Daniel Kim',   ts: '09:22', body: "Agreed. Worth confirming the noise threshold (<12dB SNR) is right — the SDM team had data suggesting 15dB is closer to room conditions." },
@@ -528,7 +627,7 @@ function SlackThreadModal({ proposalId, onClose }) {
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {messages.map((m, i) => {
-          if (m.body === 'bot-card') {
+          if (m.body === 'bot-card' && m.card) {
             return (
               <div key={i} style={{ display: 'flex', gap: 10, padding: 10, background: 'var(--bg-soft)', borderRadius: 8 }}>
                 <div style={{ width: 28, height: 28, borderRadius: 6, background: 'linear-gradient(135deg, var(--accent), var(--accent-press))', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-fg)', fontWeight: 700, fontSize: 12 }}>S</div>
@@ -612,7 +711,12 @@ function SlackThreadModal({ proposalId, onClose }) {
 // ===========================================================================
 // Date range popover
 // ===========================================================================
-function DateRangePopover({ anchor, onClose }) {
+interface DateRangePopoverProps {
+  anchor: Anchor | false;
+  onClose: () => void;
+}
+
+function DateRangePopover({ anchor, onClose }: DateRangePopoverProps) {
   const rect = anchor && typeof anchor === 'object' ? anchor : null;
   const RANGES = [
     'Last 1 hour', 'Last 24 hours', 'Last 7 days', 'Last 30 days', 'Last 90 days',
@@ -657,7 +761,11 @@ function DateRangePopover({ anchor, onClose }) {
 // ===========================================================================
 // Confirm modal — generic, for destructive actions
 // ===========================================================================
-function ConfirmModal({ title, body, danger, confirmLabel, onConfirm, onClose }) {
+interface ConfirmModalProps extends ConfirmOptions {
+  onClose: () => void;
+}
+
+function ConfirmModal({ title, body, danger, confirmLabel, onConfirm, onClose }: ConfirmModalProps) {
   return (
     <ModalShell onClose={onClose} width={440} height={'auto'} title={title}>
       <div style={{ fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.55 }}>{body}</div>
@@ -673,7 +781,17 @@ function ConfirmModal({ title, body, danger, confirmLabel, onConfirm, onClose })
 // ===========================================================================
 // Modal shell — generic frame
 // ===========================================================================
-function ModalShell({ children, title, subtitle, headerAction, width, height, onClose }) {
+interface ModalShellProps {
+  children?: ReactNode;
+  title?: ReactNode;
+  subtitle?: ReactNode;
+  headerAction?: ReactNode;
+  width?: number;
+  height?: number | 'auto';
+  onClose: () => void;
+}
+
+function ModalShell({ children, title, subtitle, headerAction, width, height, onClose }: ModalShellProps) {
   return (
     <div
       onClick={onClose}
@@ -713,7 +831,11 @@ function ModalShell({ children, title, subtitle, headerAction, width, height, on
   );
 }
 
-function ModalFooter({ children }) {
+interface ModalFooterProps {
+  children?: ReactNode;
+}
+
+function ModalFooter({ children }: ModalFooterProps) {
   return (
     <div style={{
       margin: '18px -18px 0', padding: '12px 18px',
@@ -723,4 +845,4 @@ function ModalFooter({ children }) {
   );
 }
 
-Object.assign(window, { OverlayProvider, useOverlays });
+export { OverlayProvider, useOverlays };

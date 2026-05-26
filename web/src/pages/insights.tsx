@@ -2,10 +2,26 @@
 // Insights & Proposals — Kanban with detail panel
 // ============================================================
 
-function InsightsPage() {
-  const [proposals, setProposals] = useState(PROPOSALS);
-  const [selected, setSelected] = useState('P-241');
-  const [rejectingId, setRejectingId] = useState(null);
+import { Fragment, useState } from 'react';
+import type { ReactNode, ChangeEvent } from 'react';
+import { Icons } from '../components/icons';
+import { Card, SectionHead, Badge, Button, Spark, PriDot, SourceChip, SRC_META, useToast } from '../components/ui';
+import { useOverlays } from '../components/overlays';
+import { PROPOSALS, type Proposal } from '../data/mock';
+
+type ColumnKey = Proposal['column'];
+
+interface KanbanCol {
+  key: ColumnKey;
+  label: string;
+  tone: string;
+  count: number;
+}
+
+export function InsightsPage() {
+  const [proposals, setProposals] = useState<Proposal[]>(PROPOSALS);
+  const [selected, setSelected] = useState<string>('P-241');
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectCategory, setRejectCategory] = useState('out-of-scope');
   const toast = useToast();
@@ -13,23 +29,23 @@ function InsightsPage() {
 
   const cur = proposals.find(p => p.id === selected);
 
-  const cols = [
+  const cols: KanbanCol[] = [
     { key: 'pending',  label: 'Pending review',  tone: 'warn',   count: proposals.filter(p => p.column === 'pending').length },
-    { key: 'approved', label: 'Approved',        tone: 'accent', count: proposals.filter(p => p.column === 'approved').length },
+    { key: 'approved', label: 'Approved',        tone: 'good', count: proposals.filter(p => p.column === 'approved').length },
     { key: 'in-dev',   label: 'In Auto-Dev',     tone: 'info',   count: proposals.filter(p => p.column === 'in-dev').length },
     { key: 'rejected', label: 'Rejected',        tone: 'danger', count: proposals.filter(p => p.column === 'rejected').length },
   ];
 
-  const approve = (id) => {
-    setProposals(ps => ps.map(p => p.id === id ? { ...p, column: 'approved', approver: { name: 'Maya Ortiz', at: 'just now' } } : p));
+  const approve = (id: string) => {
+    setProposals(ps => ps.map(p => p.id === id ? { ...p, column: 'approved' as const, approver: { name: 'Maya Ortiz', at: 'just now' } } : p));
     toast({ title: 'Proposal approved', body: `${id} sent to GitHub & Auto-Dev queue`, icon: <Icons.Check /> });
   };
-  const sendToDev = (id) => {
-    setProposals(ps => ps.map(p => p.id === id ? { ...p, column: 'in-dev' } : p));
+  const sendToDev = (id: string) => {
+    setProposals(ps => ps.map(p => p.id === id ? { ...p, column: 'in-dev' as const } : p));
     toast({ title: 'Auto-Dev agent dispatched', body: `${id} · GitHub issue #1849 opened`, icon: <Icons.Robot /> });
   };
   const confirmReject = () => {
-    setProposals(ps => ps.map(p => p.id === rejectingId ? { ...p, column: 'rejected', rejectReason, rejectCategory, rejector: { name: 'Maya Ortiz', at: 'just now' } } : p));
+    setProposals(ps => ps.map(p => p.id === rejectingId ? { ...p, column: 'rejected' as const, rejectReason, rejectCategory, rejector: { name: 'Maya Ortiz', at: 'just now' } } : p));
     toast({ title: 'Proposal rejected', body: `Reason saved — future similar clusters will reference this.`, icon: <Icons.X /> });
     setRejectingId(null); setRejectReason('');
   };
@@ -37,55 +53,60 @@ function InsightsPage() {
   return (
     <Fragment>
       {/* Summary strip */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr) 1.4fr', gap: 14, marginBottom: 18 }}>
-        <Card pad>
-          <div className="t-caps">This week</div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-            <div style={{ fontSize: 22, fontWeight: 500 }} className="mono fg-strong">34</div>
-            <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>proposals generated</span>
-          </div>
-          <div style={{ marginTop: 6 }}><Spark data={[2, 4, 3, 5, 6, 8, 6]} h={26} w={180} /></div>
-        </Card>
-        <Card pad>
-          <div className="t-caps">Approval rate</div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-            <div style={{ fontSize: 22, fontWeight: 500 }} className="mono fg-strong">63%</div>
-            <span className="stat-delta up mono"><Icons.ArrowUp />+8pt</span>
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>Median time-to-decide · 6h 12m</div>
-        </Card>
-        <Card pad>
-          <div className="t-caps">Avg ⌧ confidence</div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-            <div style={{ fontSize: 22, fontWeight: 500 }} className="mono fg-strong">0.86</div>
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>Opus 4.7 · grounded in 1,063 reviews</div>
-        </Card>
-        <Card pad>
-          <div className="t-caps">Next batch</div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-            <div style={{ fontSize: 18, fontWeight: 500 }} className="mono fg-strong">in 2d 14h</div>
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>Weekly · every Mon 09:00 KST</div>
-        </Card>
-        <Card pad>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Icons.Sparkles />
-            <span style={{ fontSize: 12, fontWeight: 500 }}>Insight skill</span>
-            <Badge tone="purple" subtle style={{ marginLeft: 'auto' }}>claude-opus-4-7</Badge>
-          </div>
-          <div style={{ fontSize: 11.5, color: 'var(--fg-muted)', marginTop: 8, lineHeight: 1.45 }}>
-            Clusters reviews with voyage-3 embeddings → ranks impact × effort → drafts proposal cards. Tuned to Loop's roadmap themes.
-          </div>
-          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-            <Button size="sm" variant="ghost" leftIcon={<Icons.Pencil />} onClick={() => toast({ title: 'Prompt editor', body: 'Opening skill prompt for claude-opus-4-7', icon: <Icons.Pencil /> })}>Edit prompt</Button>
-            <Button size="sm" variant="ghost" leftIcon={<Icons.External />} onClick={() => toast({ title: 'Opening logs', body: 'Last 7 days of insight runs', icon: <Icons.Activity /> })}>View logs</Button>
-          </div>
-        </Card>
-      </div>
+      <section className="section">
+        <SectionHead eyebrow="Overview" title="This week" />
+        <div className="l-grid">
+          <Card className="col-2" pad>
+            <div className="t-caps">This week</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+              <div style={{ fontSize: 22, fontWeight: 500 }} className="mono fg-strong">34</div>
+              <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>proposals generated</span>
+            </div>
+            <div style={{ marginTop: 6 }}><Spark data={[2, 4, 3, 5, 6, 8, 6]} h={26} w={180} /></div>
+          </Card>
+          <Card className="col-2" pad>
+            <div className="t-caps">Approval rate</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+              <div style={{ fontSize: 22, fontWeight: 500 }} className="mono fg-strong">63%</div>
+              <span className="stat-delta up mono"><Icons.ArrowUp />+8pt</span>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>Median time-to-decide · 6h 12m</div>
+          </Card>
+          <Card className="col-2" pad>
+            <div className="t-caps">Avg ⌧ confidence</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+              <div style={{ fontSize: 22, fontWeight: 500 }} className="mono fg-strong">0.86</div>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>Opus 4.7 · grounded in 1,063 reviews</div>
+          </Card>
+          <Card className="col-2" pad>
+            <div className="t-caps">Next batch</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+              <div style={{ fontSize: 18, fontWeight: 500 }} className="mono fg-strong">in 2d 14h</div>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>Weekly · every Mon 09:00 KST</div>
+          </Card>
+          <Card className="col-4" pad>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Icons.Sparkles />
+              <span style={{ fontSize: 12, fontWeight: 500 }}>Insight skill</span>
+              <Badge tone="purple" subtle style={{ marginLeft: 'auto' }}>claude-opus-4-7</Badge>
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--fg-muted)', marginTop: 8, lineHeight: 1.45 }}>
+              Clusters reviews with voyage-3 embeddings → ranks impact × effort → drafts proposal cards. Tuned to Loop's roadmap themes.
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              <Button size="sm" variant="ghost" leftIcon={<Icons.Pencil />} onClick={() => toast({ title: 'Prompt editor', body: 'Opening skill prompt for claude-opus-4-7', icon: <Icons.Pencil /> })}>Edit prompt</Button>
+              <Button size="sm" variant="ghost" leftIcon={<Icons.External />} onClick={() => toast({ title: 'Opening logs', body: 'Last 7 days of insight runs', icon: <Icons.Activity /> })}>View logs</Button>
+            </div>
+          </Card>
+        </div>
+      </section>
 
       {/* Layout: kanban + detail */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 14, alignItems: 'flex-start' }}>
+      <section className="section">
+        <SectionHead eyebrow="Proposals" title="Review queue" />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 'var(--gutter)', alignItems: 'flex-start' }}>
         <div className="kanban">
           {cols.map(col => (
             <div className="kanban-col" key={col.key}>
@@ -126,7 +147,8 @@ function InsightsPage() {
             onViewAgent={(agentId) => { window.dispatchEvent(new CustomEvent('selfheal:nav-agent', { detail: agentId })); overlays.navigate('agent'); }}
           />
         )}
-      </div>
+        </div>
+      </section>
 
       {/* Reject modal */}
       {rejectingId && (
@@ -143,7 +165,15 @@ function InsightsPage() {
 }
 
 // ----- Proposal card -------------------------------------------------------
-function ProposalCard({ p, selected, onClick, onApprove, onReject, onSendToDev }) {
+interface ProposalCardProps {
+  p: Proposal;
+  selected: boolean;
+  onClick: () => void;
+  onApprove: () => void;
+  onReject: () => void;
+  onSendToDev: () => void;
+}
+function ProposalCard({ p, selected, onClick, onApprove, onReject, onSendToDev }: ProposalCardProps) {
   return (
     <div className={`proposal-card ${selected ? 'expanded' : ''}`} onClick={onClick}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -204,7 +234,16 @@ function ProposalCard({ p, selected, onClick, onApprove, onReject, onSendToDev }
 }
 
 // ----- Detail panel --------------------------------------------------------
-function DetailPanel({ p, onApprove, onReject, onSendToDev, onOpenSlack, onOpenGithub, onViewAgent }) {
+interface DetailPanelProps {
+  p: Proposal;
+  onApprove: () => void;
+  onReject: () => void;
+  onSendToDev: () => void;
+  onOpenSlack: () => void;
+  onOpenGithub: () => void;
+  onViewAgent: (agentId: string | undefined) => void;
+}
+function DetailPanel({ p, onApprove, onReject, onSendToDev, onOpenSlack, onOpenGithub, onViewAgent }: DetailPanelProps) {
   return (
     <div className="card" style={{ position: 'sticky', top: 0, maxHeight: 'calc(100vh - 180px)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
@@ -260,7 +299,7 @@ function DetailPanel({ p, onApprove, onReject, onSendToDev, onOpenSlack, onOpenG
         <div style={{ marginBottom: 14 }}>
           <div className="t-caps" style={{ marginBottom: 6 }}>Skill / Agent</div>
           <Badge tone="purple" subtle><Icons.Sparkles />{p.skill}</Badge>
-          {p.similar > 0 && (
+          {p.similar != null && p.similar > 0 && (
             <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}>
               {p.similar} similar past proposal{p.similar > 1 ? 's' : ''} found · referencing reject comments
             </div>
@@ -322,7 +361,11 @@ function DetailPanel({ p, onApprove, onReject, onSendToDev, onOpenSlack, onOpenG
   );
 }
 
-function Stat({ label, v }) {
+interface StatProps {
+  label: string;
+  v: ReactNode;
+}
+function Stat({ label, v }: StatProps) {
   return (
     <div style={{ padding: 10, background: 'var(--bg-soft)', borderRadius: 6 }}>
       <div className="t-caps" style={{ fontSize: 9.5 }}>{label}</div>
@@ -332,8 +375,17 @@ function Stat({ label, v }) {
 }
 
 // ----- Reject modal --------------------------------------------------------
-function RejectModal({ id, category, setCategory, reason, setReason, onClose, onConfirm }) {
-  const cats = [
+interface RejectModalProps {
+  id: string;
+  category: string;
+  setCategory: (v: string) => void;
+  reason: string;
+  setReason: (v: string) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+function RejectModal({ id, category, setCategory, reason, setReason, onClose, onConfirm }: RejectModalProps) {
+  const cats: { v: string; l: string }[] = [
     { v: 'out-of-scope',  l: 'Out of scope / roadmap conflict' },
     { v: 'duplicate',     l: 'Duplicate / overlaps existing work' },
     { v: 'low-value',     l: 'Low value vs. effort' },
@@ -370,7 +422,7 @@ function RejectModal({ id, category, setCategory, reason, setReason, onClose, on
             <textarea
               placeholder="e.g. Overlaps with workspace-templates RFC already in design (Issue #2104). Revisit Q2."
               value={reason}
-              onChange={(e) => setReason(e.target.value)}
+              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setReason(e.target.value)}
             />
           </div>
         </div>
@@ -382,5 +434,3 @@ function RejectModal({ id, category, setCategory, reason, setReason, onClose, on
     </div>
   );
 }
-
-window.InsightsPage = InsightsPage;

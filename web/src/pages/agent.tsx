@@ -5,9 +5,19 @@
 //   1. Summary cards (3 variants: timeline / terminal / compact)
 //   2. Click card → rich detail modal (timeline + logs + diff + PR)
 
-function AgentPage({ cardStyle }) {
-  const [tab, setTab] = useState('active');
-  const [openId, setOpenId] = useState(null);
+import { Fragment, useState, useEffect } from 'react';
+import type { ReactNode } from 'react';
+import { Icons } from '../components/icons';
+import { Card, SectionHead, Badge, Button, Tabs, PriDot } from '../components/ui';
+import { useOverlays } from '../components/overlays';
+import { AGENTS, TERMINAL_LINES, type AgentRun } from '../data/mock';
+
+type CardStyle = 'timeline' | 'terminal' | 'compact';
+type AgentTab = 'active' | 'failed' | 'merged' | 'all';
+
+export function AgentPage({ cardStyle }: { cardStyle: CardStyle }) {
+  const [tab, setTab] = useState<AgentTab>('active');
+  const [openId, setOpenId] = useState<string | null>(null);
 
   const counts = {
     active:    AGENTS.filter(a => a.status === 'running' || a.status === 'review-needed').length,
@@ -26,64 +36,74 @@ function AgentPage({ cardStyle }) {
 
   return (
     <Fragment>
-      {/* Strip: meta */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14, marginBottom: 18 }}>
-        <Card pad>
-          <div className="t-caps">Agents running</div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-            <div style={{ fontSize: 22, fontWeight: 500 }} className="mono fg-strong">4</div>
-            <span className="badge accent dot" style={{ marginLeft: 'auto' }}>Live</span>
-          </div>
-        </Card>
-        <Card pad>
-          <div className="t-caps">Awaiting review</div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-            <div style={{ fontSize: 22, fontWeight: 500, color: 'var(--info)' }} className="mono">2</div>
-            <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>PRs open</span>
-          </div>
-        </Card>
-        <Card pad>
-          <div className="t-caps">Failed (24h)</div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-            <div style={{ fontSize: 22, fontWeight: 500, color: 'var(--danger)' }} className="mono">3</div>
-            <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>auto-retry × 1</span>
-          </div>
-        </Card>
-        <Card pad>
-          <div className="t-caps">Merged (30d)</div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-            <div style={{ fontSize: 22, fontWeight: 500 }} className="mono fg-accent">18</div>
-            <span className="stat-delta up mono"><Icons.ArrowUp />+4</span>
-          </div>
-        </Card>
-        <Card pad>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Icons.Robot />
-            <span style={{ fontSize: 12, fontWeight: 500 }}>Active skill</span>
-            <Badge tone="purple" subtle style={{ marginLeft: 'auto' }}>claude-sonnet-4-6</Badge>
-          </div>
-          <div style={{ fontSize: 11.5, color: 'var(--fg-muted)', marginTop: 8, lineHeight: 1.45 }}>
-            Plans, edits, tests in sandbox. Stops at PR.<br />Concurrency: 4 · timeout 30 min.
-          </div>
-        </Card>
-      </div>
+      {/* === Status overview === */}
+      <section className="section">
+        <SectionHead eyebrow="Overview" title="Agent status" />
+        <div className="l-grid">
+          {/* Row 1: 4 stat cards col-3 each */}
+          <Card className="col-3" pad>
+            <div className="t-caps">Agents running</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+              <div style={{ fontSize: 22, fontWeight: 500 }} className="mono fg-strong">4</div>
+              <span className="badge accent dot" style={{ marginLeft: 'auto' }}>Live</span>
+            </div>
+          </Card>
+          <Card className="col-3" pad>
+            <div className="t-caps">Awaiting review</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+              <div style={{ fontSize: 22, fontWeight: 500, color: 'var(--info)' }} className="mono">2</div>
+              <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>PRs open</span>
+            </div>
+          </Card>
+          <Card className="col-3" pad>
+            <div className="t-caps">Failed (24h)</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+              <div style={{ fontSize: 22, fontWeight: 500, color: 'var(--danger)' }} className="mono">3</div>
+              <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>auto-retry × 1</span>
+            </div>
+          </Card>
+          <Card className="col-3" pad>
+            <div className="t-caps">Merged (30d)</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+              <div style={{ fontSize: 22, fontWeight: 500 }} className="mono fg-accent">18</div>
+              <span className="stat-delta up mono"><Icons.ArrowUp />+4</span>
+            </div>
+          </Card>
+          {/* Row 2: skill card full-width */}
+          <Card className="col-12" pad>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Icons.Robot />
+              <span style={{ fontSize: 12, fontWeight: 500 }}>Active skill</span>
+              <Badge tone="purple" subtle style={{ marginLeft: 'auto' }}>claude-sonnet-4-6</Badge>
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--fg-muted)', marginTop: 8, lineHeight: 1.45 }}>
+              Plans, edits, tests in sandbox. Stops at PR.<br />Concurrency: 4 · timeout 30 min.
+            </div>
+          </Card>
+        </div>
+      </section>
 
-      <Tabs
-        value={tab} onChange={setTab}
-        items={[
-          { value: 'active', label: 'Active',  count: counts.active },
-          { value: 'failed', label: 'Failed',  count: counts.failed },
-          { value: 'merged', label: 'Merged',  count: counts.merged },
-          { value: 'all',    label: 'All runs',count: counts.all    },
-        ]}
-      />
-
-      {/* Cards grid — 3 across at standard width */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
-        {filtered.map(a => (
-          <SummaryCard key={a.id} a={a} variant={cardStyle} onOpen={() => setOpenId(a.id)} />
-        ))}
-      </div>
+      {/* === Run queue === */}
+      <section className="section">
+        <SectionHead eyebrow="Queue" title="Agent runs" />
+        <Tabs
+          value={tab} onChange={(v: string) => setTab(v as AgentTab)}
+          items={[
+            { value: 'active', label: 'Active',   count: counts.active },
+            { value: 'failed', label: 'Failed',   count: counts.failed },
+            { value: 'merged', label: 'Merged',   count: counts.merged },
+            { value: 'all',    label: 'All runs', count: counts.all    },
+          ]}
+        />
+        {/* Cards grid — col-4 × 3 across */}
+        <div className="l-grid">
+          {filtered.map(a => (
+            <div key={a.id} className="col-4">
+              <SummaryCard a={a} variant={cardStyle} onOpen={() => setOpenId(a.id)} />
+            </div>
+          ))}
+        </div>
+      </section>
 
       {openAgent && (
         <AgentDetailModal a={openAgent} onClose={() => setOpenId(null)} />
@@ -95,7 +115,12 @@ function AgentPage({ cardStyle }) {
 // ===========================================================================
 // Summary card — compact, 3 variants
 // ===========================================================================
-function SummaryCard({ a, variant, onOpen }) {
+interface SummaryCardProps {
+  a: AgentRun;
+  variant: CardStyle;
+  onOpen: () => void;
+}
+function SummaryCard({ a, variant, onOpen }: SummaryCardProps) {
   const running = a.status === 'running';
   const failed = a.status === 'failed';
   const review = a.status === 'review-needed';
@@ -178,7 +203,7 @@ function SummaryCard({ a, variant, onOpen }) {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--fg-muted)' }}>
             {failed
-              ? <span style={{ color: 'var(--danger)' }}>Failed at step {a.failedAt} · <span style={{ color: 'var(--fg)' }}>{a.steps[a.failedAt - 1]?.label}</span></span>
+              ? <span style={{ color: 'var(--danger)' }}>Failed at step {a.failedAt} · <span style={{ color: 'var(--fg)' }}>{a.steps[(a.failedAt ?? 1) - 1]?.label}</span></span>
               : merged
               ? <span style={{ color: 'var(--accent)' }}>All {a.steps.length} steps complete</span>
               : <span>Step {doneCount + (running ? 1 : 0)}/{a.steps.length} · <span style={{ color: 'var(--fg)' }}>{currentStep?.label}</span></span>
@@ -249,7 +274,7 @@ function SummaryCard({ a, variant, onOpen }) {
         <span className="dot-divider">·</span>
         <span className="mono" style={{ fontSize: 11, color: review || merged ? 'var(--accent)' : failed ? 'var(--danger)' : 'var(--fg)' }}>{a.eta}</span>
         <span style={{ flex: 1 }} />
-        {review && <Badge tone="accent" subtle style={{ fontSize: 10 }}><Icons.GitPull />#{a.pr.number}</Badge>}
+        {review && <Badge tone="accent" subtle style={{ fontSize: 10 }}><Icons.GitPull />#{a.pr?.number}</Badge>}
         {failed && <Badge tone="danger" subtle style={{ fontSize: 10 }}><Icons.AlertTri />Action needed</Badge>}
         <Icons.ChevRight />
       </div>
@@ -260,9 +285,15 @@ function SummaryCard({ a, variant, onOpen }) {
 // ===========================================================================
 // Detail modal — full timeline + tabbed body + actions
 // ===========================================================================
-function AgentDetailModal({ a, onClose }) {
+type ModalTab = 'overview' | 'logs' | 'diff' | 'pr';
+
+interface AgentDetailModalProps {
+  a: AgentRun;
+  onClose: () => void;
+}
+function AgentDetailModal({ a, onClose }: AgentDetailModalProps) {
   const overlays = useOverlays();
-  const [tab, setTab] = useState(
+  const [tab, setTab] = useState<ModalTab>(
     a.status === 'failed' ? 'logs'
     : a.status === 'review-needed' ? 'pr'
     : a.status === 'merged' ? 'pr'
@@ -275,7 +306,7 @@ function AgentDetailModal({ a, onClose }) {
 
   // Close on escape
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
@@ -370,12 +401,12 @@ function AgentDetailModal({ a, onClose }) {
           {/* Right: tabbed body */}
           <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <div style={{ padding: '0 18px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 0 }}>
-              {[
+              {([
                 { v: 'overview', l: 'Overview' },
                 { v: 'logs',     l: 'Logs' },
                 { v: 'diff',     l: 'Diff', count: a.diff?.files },
                 { v: 'pr',       l: a.pr?.merged ? 'Merged PR' : a.pr ? 'PR' : 'Result' },
-              ].map(t => (
+              ] as { v: ModalTab; l: string; count?: number }[]).map(t => (
                 <div key={t.v}
                   onClick={() => setTab(t.v)}
                   className={`tab ${tab === t.v ? 'active' : ''}`}
@@ -417,13 +448,13 @@ function AgentDetailModal({ a, onClose }) {
           )}
           {review && (
             <Fragment>
-              <Button variant="primary" leftIcon={<Icons.External />} onClick={() => overlays.toast({ title: 'Opening PR', body: `loop/loop-app#${a.pr.number}`, icon: <Icons.Github /> })}>Open PR #{a.pr.number}</Button>
+              <Button variant="primary" leftIcon={<Icons.External />} onClick={() => overlays.toast({ title: 'Opening PR', body: `loop/loop-app#${a.pr?.number}`, icon: <Icons.Github /> })}>Open PR #{a.pr?.number}</Button>
               <Button variant="ghost" leftIcon={<Icons.Eye />} onClick={() => setTab('diff')}>Review diff</Button>
-              <Button variant="ghost" leftIcon={<Icons.Slack />} onClick={() => overlays.toast({ title: 'Posted to Slack', body: `#selfheal-review notified — PR #${a.pr.number} ready for review`, icon: <Icons.Slack /> })}>Notify Slack</Button>
+              <Button variant="ghost" leftIcon={<Icons.Slack />} onClick={() => overlays.toast({ title: 'Posted to Slack', body: `#selfheal-review notified — PR #${a.pr?.number} ready for review`, icon: <Icons.Slack /> })}>Notify Slack</Button>
             </Fragment>
           )}
           {merged && (
-            <Button variant="ghost" leftIcon={<Icons.External />} onClick={() => overlays.toast({ title: 'Opening PR', body: `loop/loop-app#${a.pr.number} · merged`, icon: <Icons.GitPull /> })}>Open merged PR #{a.pr.number}</Button>
+            <Button variant="ghost" leftIcon={<Icons.External />} onClick={() => overlays.toast({ title: 'Opening PR', body: `loop/loop-app#${a.pr?.number} · merged`, icon: <Icons.GitPull /> })}>Open merged PR #{a.pr?.number}</Button>
           )}
           <span style={{ flex: 1 }} />
           <Button variant="ghost" onClick={onClose}>Close <span className="kbd">esc</span></Button>
@@ -433,7 +464,12 @@ function AgentDetailModal({ a, onClose }) {
   );
 }
 
-function ModalMeta({ k, v, mono }) {
+interface ModalMetaProps {
+  k: ReactNode;
+  v: ReactNode;
+  mono?: boolean;
+}
+function ModalMeta({ k, v, mono }: ModalMetaProps) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: 8, padding: '4px 0' }}>
       <div style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>{k}</div>
@@ -445,7 +481,10 @@ function ModalMeta({ k, v, mono }) {
 // ===========================================================================
 // Tabs inside the modal
 // ===========================================================================
-function TabOverview({ a }) {
+interface TabProps {
+  a: AgentRun;
+}
+function TabOverview({ a }: TabProps) {
   return (
     <Fragment>
       <div style={{ marginBottom: 16 }}>
@@ -498,7 +537,7 @@ function TabOverview({ a }) {
   );
 }
 
-function TabLogs({ a }) {
+function TabLogs({ a }: TabProps) {
   const failed = a.status === 'failed';
   const lines = TERMINAL_LINES.slice(0, failed ? 12 : 13);
   return (
@@ -545,8 +584,8 @@ function TabLogs({ a }) {
   );
 }
 
-function TabDiff({ a }) {
-  const sample = [
+function TabDiff({ a }: TabProps) {
+  const sample: { line: number; type: 'ctx' | 'rem' | 'add'; text: string }[] = [
     { line: 1,   type: 'ctx',  text: '// AudioSessionCoordinator.swift' },
     { line: 2,   type: 'ctx',  text: '' },
     { line: 3,   type: 'ctx',  text: 'class AudioSessionCoordinator {' },
@@ -578,8 +617,8 @@ function TabDiff({ a }) {
         {sample.map((row, i) => (
           <div key={i} style={{
             display: 'grid', gridTemplateColumns: '40px 1fr',
-            background: row.type === 'add' ? 'rgba(0, 212, 168, 0.08)'
-                      : row.type === 'rem' ? 'rgba(244, 63, 94, 0.08)'
+            background: row.type === 'add' ? 'var(--good-soft)'
+                      : row.type === 'rem' ? 'var(--danger-soft)'
                       : 'transparent',
             color: row.type === 'add' ? 'var(--fg-strong)'
                  : row.type === 'rem' ? 'var(--fg-muted)'
@@ -605,7 +644,7 @@ function TabDiff({ a }) {
   );
 }
 
-function TabPR({ a }) {
+function TabPR({ a }: TabProps) {
   if (!a.pr && a.status !== 'failed') {
     return (
       <div style={{ padding: 24, textAlign: 'center', color: 'var(--fg-muted)', fontSize: 12.5 }}>
@@ -635,22 +674,23 @@ function TabPR({ a }) {
       </div>
     );
   }
+  const pr = a.pr!;
   return (
     <Fragment>
       <div style={{
-        padding: 14, background: a.pr.merged ? 'var(--accent-soft)' : 'var(--info-soft)',
-        border: `1px solid ${a.pr.merged ? 'var(--accent)' : 'var(--info)'}`,
+        padding: 14, background: pr.merged ? 'var(--accent-soft)' : 'var(--info-soft)',
+        border: `1px solid ${pr.merged ? 'var(--accent)' : 'var(--info)'}`,
         borderRadius: 6, marginBottom: 14,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Icons.GitPull />
-          <span style={{ fontSize: 13, fontWeight: 500, color: a.pr.merged ? 'var(--accent)' : 'var(--info)' }}>
-            {a.pr.merged ? `Merged · PR #${a.pr.number}` : `Open · PR #${a.pr.number}`}
+          <span style={{ fontSize: 13, fontWeight: 500, color: pr.merged ? 'var(--accent)' : 'var(--info)' }}>
+            {pr.merged ? `Merged · PR #${pr.number}` : `Open · PR #${pr.number}`}
           </span>
           <span style={{ flex: 1 }} />
-          <Badge tone={a.pr.merged ? 'accent' : 'info'} subtle><Icons.Check />{a.pr.passing}/{a.pr.checks} checks</Badge>
+          <Badge tone={pr.merged ? 'good' : 'info'} subtle><Icons.Check />{pr.passing}/{pr.checks} checks</Badge>
         </div>
-        <div style={{ fontSize: 13, color: 'var(--fg-strong)', marginTop: 8, fontWeight: 500 }}>{a.pr.title}</div>
+        <div style={{ fontSize: 13, color: 'var(--fg-strong)', marginTop: 8, fontWeight: 500 }}>{pr.title}</div>
       </div>
 
       <div className="t-caps" style={{ marginBottom: 6 }}>PR description</div>
@@ -668,7 +708,7 @@ function TabPR({ a }) {
         <div style={{ color: 'var(--fg-muted)' }}>Reproduced original crash on iPad Pro 13" / iPadOS 17.4. Added unit tests for rotation during active recording. Manual verification on 3 device sizes.</div>
       </div>
 
-      <div className="t-caps" style={{ marginBottom: 6 }}>Checks ({a.pr.passing}/{a.pr.checks})</div>
+      <div className="t-caps" style={{ marginBottom: 6 }}>Checks ({pr.passing}/{pr.checks})</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {[
           ['unit-tests',         'AudioSessionCoordinatorTests · 8 / 8 passed', 'pass'],
@@ -692,12 +732,10 @@ function TabPR({ a }) {
 }
 
 // ----- Status badge --------------------------------------------------------
-function StatusBadge({ status }) {
+function StatusBadge({ status }: { status: AgentRun['status'] }) {
   if (status === 'running')        return <Badge tone="accent" dot>Running</Badge>;
   if (status === 'review-needed')  return <Badge tone="info" dot>Review</Badge>;
   if (status === 'failed')         return <Badge tone="danger" dot>Failed</Badge>;
-  if (status === 'merged')         return <Badge tone="accent" subtle><Icons.Check />Merged</Badge>;
+  if (status === 'merged')         return <Badge tone="good" subtle><Icons.Check />Merged</Badge>;
   return <Badge subtle>Idle</Badge>;
 }
-
-window.AgentPage = AgentPage;

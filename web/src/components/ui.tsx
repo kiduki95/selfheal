@@ -2,10 +2,22 @@
 // SelfHeal — Shared UI primitives
 // ============================================================
 
-const { useState, useEffect, useRef, useMemo, useCallback, Fragment } = React;
+import { useState, useCallback, createContext, useContext } from 'react';
+import type { ReactNode, CSSProperties, ButtonHTMLAttributes } from 'react';
+import { Icons } from './icons';
 
 // ----- Button --------------------------------------------------------------
-function Button({ children, variant = 'default', size, leftIcon, rightIcon, kbd, onClick, className = '', ...rest }) {
+interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  children?: ReactNode;
+  variant?: 'default' | 'primary' | 'ghost' | 'danger';
+  size?: 'lg' | 'sm';
+  leftIcon?: ReactNode;
+  rightIcon?: ReactNode;
+  kbd?: string;
+  className?: string;
+}
+
+function Button({ children, variant = 'default', size, leftIcon, rightIcon, kbd, onClick, className = '', ...rest }: ButtonProps) {
   const cls = [
     'btn',
     variant === 'primary' && 'primary',
@@ -16,7 +28,7 @@ function Button({ children, variant = 'default', size, leftIcon, rightIcon, kbd,
     className,
   ].filter(Boolean).join(' ');
   // Defensive: strip any leaked unknown DOM attrs from runtime instrumentation
-  const safeRest = { ...rest };
+  const safeRest: Record<string, unknown> = { ...rest };
   delete safeRest.leftIcon;
   delete safeRest.rightIcon;
   return (
@@ -30,28 +42,83 @@ function Button({ children, variant = 'default', size, leftIcon, rightIcon, kbd,
 }
 
 // ----- Badge ---------------------------------------------------------------
-function Badge({ children, tone, dot, subtle, className = '' }) {
+interface BadgeProps {
+  children?: ReactNode;
+  tone?: string;
+  dot?: boolean;
+  subtle?: boolean;
+  className?: string;
+  style?: CSSProperties;
+  onClick?: (e: React.MouseEvent<HTMLSpanElement>) => void;
+}
+
+function Badge({ children, tone, dot, subtle, className = '', style, onClick }: BadgeProps) {
   const cls = ['badge', tone, dot && 'dot', subtle && 'subtle', className].filter(Boolean).join(' ');
-  return <span className={cls}>{children}</span>;
+  return <span className={cls} style={style} onClick={onClick}>{children}</span>;
 }
 
 // ----- Card ----------------------------------------------------------------
-function Card({ title, action, children, className = '', pad = false, padLg = false }) {
+interface CardProps {
+  title?: ReactNode;
+  action?: ReactNode;
+  children?: ReactNode;
+  className?: string;
+  pad?: boolean;
+  padLg?: boolean;
+  style?: CSSProperties;
+}
+
+function Card({ title, action, children, className = '', pad = false, padLg = false, style }: CardProps) {
+  const bodyCls = ['card-body', padLg ? 'pad-lg' : pad ? '' : 'flush'].filter(Boolean).join(' ');
   return (
-    <div className={`card ${className}`}>
+    <div className={`card ${className}`} style={style}>
       {title && (
         <div className="card-title">
           <h3>{title}</h3>
           {action}
         </div>
       )}
-      <div className={pad ? 'card-pad' : padLg ? 'card-pad-lg' : ''}>{children}</div>
+      <div className={bodyCls}>{children}</div>
+    </div>
+  );
+}
+
+// ----- Section header ------------------------------------------------------
+// Editorial group label: caps eyebrow + serif title + hairline rule to the
+// right edge, with an optional action. Used to structure dashboard/page rows.
+interface SectionHeadProps {
+  eyebrow?: string;
+  title: ReactNode;
+  action?: ReactNode;
+}
+
+function SectionHead({ eyebrow, title, action }: SectionHeadProps) {
+  return (
+    <div className="section-head">
+      <div className="section-head-text">
+        {eyebrow && <div className="section-eyebrow">{eyebrow}</div>}
+        <div className="section-title">{title}</div>
+      </div>
+      <div className="section-rule" />
+      {action && <div className="section-action">{action}</div>}
     </div>
   );
 }
 
 // ----- Tabs ----------------------------------------------------------------
-function Tabs({ items, value, onChange }) {
+interface TabItem {
+  value: string;
+  label: ReactNode;
+  count?: number;
+}
+
+interface TabsProps {
+  items: TabItem[];
+  value: string;
+  onChange: (value: string) => void;
+}
+
+function Tabs({ items, value, onChange }: TabsProps) {
   return (
     <div className="tabs">
       {items.map((it) => (
@@ -69,12 +136,24 @@ function Tabs({ items, value, onChange }) {
 }
 
 // ----- Switch --------------------------------------------------------------
-function Switch({ on, onChange }) {
+interface SwitchProps {
+  on: boolean;
+  onChange: (on: boolean) => void;
+}
+
+function Switch({ on, onChange }: SwitchProps) {
   return <div className={`switch ${on ? 'on' : ''}`} onClick={() => onChange(!on)} />;
 }
 
 // ----- Sparkline -----------------------------------------------------------
-function Spark({ data, h = 28, w = 92, fill = true }) {
+interface SparkProps {
+  data: number[];
+  h?: number;
+  w?: number;
+  fill?: boolean;
+}
+
+function Spark({ data, h = 28, w = 92, fill = true }: SparkProps) {
   const max = Math.max(...data, 1);
   const min = Math.min(...data, 0);
   const range = max - min || 1;
@@ -93,7 +172,13 @@ function Spark({ data, h = 28, w = 92, fill = true }) {
   );
 }
 
-function SparkBars({ data, h = 28, w = 92 }) {
+interface SparkBarsProps {
+  data: number[];
+  h?: number;
+  w?: number;
+}
+
+function SparkBars({ data, h = 28, w = 92 }: SparkBarsProps) {
   const max = Math.max(...data, 1);
   const bw = w / data.length - 1;
   return (
@@ -117,7 +202,7 @@ function SparkBars({ data, h = 28, w = 92 }) {
 }
 
 // ----- Source chip ---------------------------------------------------------
-const SRC_META = {
+const SRC_META: Record<string, { name: string; bg: string; letter: string }> = {
   appstore:  { name: 'App Store',   bg: '#0a84ff', letter: 'A' },
   playstore: { name: 'Play Store',  bg: '#34a853', letter: 'P' },
   reddit:    { name: 'Reddit',      bg: '#ff4500', letter: 'R' },
@@ -128,11 +213,16 @@ const SRC_META = {
   intercom:  { name: 'Intercom',    bg: '#1e88e5', letter: 'I' },
 };
 
-function SourceChip({ src, label }) {
+interface SourceChipProps {
+  src: string;
+  label?: string;
+}
+
+function SourceChip({ src, label }: SourceChipProps) {
   const m = SRC_META[src] || SRC_META.web;
   const iconOnly = label === '';
   return (
-    <span className="src-chip" style={iconOnly ? { padding: 3 } : null}>
+    <span className="src-chip" style={iconOnly ? { padding: 3 } : undefined}>
       <span className="src-ico" style={{ background: m.bg }}>{m.letter}</span>
       {!iconOnly && (label || m.name)}
     </span>
@@ -140,16 +230,37 @@ function SourceChip({ src, label }) {
 }
 
 // ----- Priority dot --------------------------------------------------------
-function PriDot({ p }) {
+interface PriDotProps {
+  p: number;
+}
+
+function PriDot({ p }: PriDotProps) {
   return <span className={`proposal-pri-dot p${p}`} title={`P${p}`} />;
 }
 
 // ----- Toast stack ---------------------------------------------------------
-const ToastCtx = React.createContext(null);
+interface Toast {
+  title: string;
+  body?: string;
+  icon?: ReactNode;
+  duration?: number;
+}
 
-function ToastProvider({ children }) {
-  const [toasts, setToasts] = useState([]);
-  const push = useCallback((t) => {
+type ToastCtxValue = ((t: Toast) => void) | null;
+
+const ToastCtx = createContext<ToastCtxValue>(null);
+
+interface ToastProviderProps {
+  children?: ReactNode;
+}
+
+interface ToastInstance extends Toast {
+  id: string;
+}
+
+function ToastProvider({ children }: ToastProviderProps) {
+  const [toasts, setToasts] = useState<ToastInstance[]>([]);
+  const push = useCallback((t: Toast) => {
     const id = Math.random().toString(36).slice(2);
     setToasts((cur) => [...cur, { ...t, id }]);
     setTimeout(() => setToasts((cur) => cur.filter((x) => x.id !== id)), t.duration || 4500);
@@ -172,10 +283,19 @@ function ToastProvider({ children }) {
   );
 }
 
-const useToast = () => React.useContext(ToastCtx);
+const useToast = (): ((t: Toast) => void) => {
+  const ctx = useContext(ToastCtx);
+  if (!ctx) throw new Error('useToast must be used within <ToastProvider>');
+  return ctx;
+};
 
 // ----- Heatmap row ---------------------------------------------------------
-function HeatRow({ values, max }) {
+interface HeatRowProps {
+  values: number[];
+  max?: number;
+}
+
+function HeatRow({ values, max }: HeatRowProps) {
   const m = max || Math.max(...values, 1);
   return (
     <div style={{ display: 'flex', gap: 2 }}>
@@ -186,7 +306,9 @@ function HeatRow({ values, max }) {
             key={i}
             style={{
               width: 11, height: 11, borderRadius: 2,
-              background: v === 0 ? 'var(--surface-2)' : `rgba(0, 212, 168, ${0.15 + a * 0.65})`,
+              background: v === 0
+                ? 'var(--surface-2)'
+                : `color-mix(in srgb, var(--accent) ${Math.round((0.14 + a * 0.66) * 100)}%, transparent)`,
             }}
             title={`${v}`}
           />
@@ -196,7 +318,8 @@ function HeatRow({ values, max }) {
   );
 }
 
-Object.assign(window, {
-  Button, Badge, Card, Tabs, Switch, Spark, SparkBars, SourceChip, PriDot,
+export {
+  Button, Badge, Card, SectionHead, Tabs, Switch, Spark, SparkBars, SourceChip, PriDot,
   ToastProvider, useToast, HeatRow, SRC_META,
-});
+};
+export type { Toast };

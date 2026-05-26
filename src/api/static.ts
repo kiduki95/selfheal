@@ -4,16 +4,18 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ApiEnv } from './contract.js';
 
-// Static serving for web/ (no-build React mockup). .jsx is served as text/javascript (Babel standalone transforms it in the browser).
-const WEB_DIR = fileURLToPath(new URL('../../web/', import.meta.url));
+// Static serving for the built web/ UI (Vite + React + TS → web/dist). Run `npm --prefix web run build` first.
+const WEB_DIR = fileURLToPath(new URL('../../web/dist/', import.meta.url));
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
-  '.jsx': 'text/javascript; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
   '.json': 'application/json; charset=utf-8',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
 };
 
 export function serveStaticWeb(app: Hono<ApiEnv>) {

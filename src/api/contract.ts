@@ -15,7 +15,7 @@ export interface ApiEnvelope<T> {
 }
 export const envelope = <T>(data: T, repo: string, source: 'live' | 'mock' = 'live', note?: string): ApiEnvelope<T> => ({ source, repo, data, note });
 
-// --- Per-page response types (1:1 with web/mock.jsx · mock-extras.jsx shapes) ---
+// --- Per-page response types (1:1 with web/data/mock.jsx · mock-extras.jsx shapes) ---
 
 export interface PipelineStage { num: string; name: string; value: number; unit: string; sub: string; sparkData: number[]; }
 export interface Category { name: string; count: number; share: number; trend: 'up' | 'down' | 'flat'; pct: number; }

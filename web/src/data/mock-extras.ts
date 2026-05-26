@@ -2,9 +2,48 @@
 // SelfHeal — Extended mock data: raw reviews + audit events
 // ============================================================
 
+import type { SourceKind } from './mock';
+
+// ----- Domain types --------------------------------------------------------
+
+export interface RawReview {
+  id: string;
+  src: SourceKind;
+  author: string;
+  country: string;
+  lang: string;
+  rating: number | null;
+  sentiment: 'pos' | 'neg' | 'neu' | 'mix';
+  priority: string;
+  when: string;
+  text: string;
+  text_en?: string;
+  category: string;
+  confidence: number;
+  mapped: string | null;
+  mappedLabel: string;
+  cluster: string | null;
+  tags: string[];
+  isOrphan?: boolean;
+  filtered?: boolean;
+}
+
+export interface AuditEvent {
+  id: string;
+  t: string;
+  day: string;
+  actor: string;
+  actorKind: 'agent' | 'human' | 'system';
+  type: string;
+  title: string;
+  target: string;
+  detail: string;
+  tone: 'accent' | 'good' | 'info' | 'purple' | 'danger' | 'warn';
+}
+
 // ----- Raw reviews ---------------------------------------------------------
 // Realistic, varied sample across sources / sentiment / language.
-const RAW_REVIEWS = [
+export const RAW_REVIEWS: RawReview[] = [
   {
     id: 'r_8801',
     src: 'appstore', author: '@sj_kim_pm', country: 'KR', lang: 'KR',
@@ -208,16 +247,16 @@ const RAW_REVIEWS = [
 
 // ----- Audit / Activity events --------------------------------------------
 // Detailed timeline events for the audit log page.
-const AUDIT_EVENTS = [
+export const AUDIT_EVENTS: AuditEvent[] = [
   { id: 'ev_1042', t: '14:38:24', day: 'Today',     actor: 'agent_1847',  actorKind: 'agent',  type: 'agent_step',
     title: 'Auto-Dev step: running tests',          target: 'PR #1847',
-    detail: 'AudioSessionCoordinatorTests · 8 / 8 passed (1.4s)', tone: 'accent' },
+    detail: 'AudioSessionCoordinatorTests · 8 / 8 passed (1.4s)', tone: 'good' },
   { id: 'ev_1041', t: '14:36:48', day: 'Today',     actor: 'agent_1847',  actorKind: 'agent',  type: 'agent_step',
     title: 'Auto-Dev step: code written',           target: 'fix/p-236-ipad-rotation-crash',
     detail: '4 files changed · +127 −38', tone: 'info' },
   { id: 'ev_1040', t: '14:24:11', day: 'Today',     actor: 'Maya Ortiz',  actorKind: 'human',  type: 'approval',
     title: 'Approved proposal P-236',               target: 'iPad split-view crash on rotation',
-    detail: 'via Slack #selfheal-review · dispatched to Auto-Dev', tone: 'accent' },
+    detail: 'via Slack #selfheal-review · dispatched to Auto-Dev', tone: 'good' },
   { id: 'ev_1039', t: '14:18:02', day: 'Today',     actor: 'system',      actorKind: 'system', type: 'insight',
     title: 'New insight cluster',                   target: 'cluster_92 · 47 reviews',
     detail: 'iPad split-view crash · confidence 0.97 · skill: claude-opus-4-7', tone: 'purple' },
@@ -235,7 +274,7 @@ const AUDIT_EVENTS = [
     detail: 'voyage-3 embeddings · k=148 · silhouette 0.71', tone: 'info' },
   { id: 'ev_1034', t: '12:48:09', day: 'Today',     actor: 'Sam Chen',    actorKind: 'human',  type: 'merge',
     title: 'Merged PR #1841',                       target: 'fix: summary truncation for >90 min meetings',
-    detail: 'CI green · 8 / 8 checks · 1 approval (Maya Ortiz)', tone: 'accent' },
+    detail: 'CI green · 8 / 8 checks · 1 approval (Maya Ortiz)', tone: 'good' },
   { id: 'ev_1033', t: '12:14:22', day: 'Today',     actor: 'Maya Ortiz',  actorKind: 'human',  type: 'settings',
     title: 'Changed schedule',                      target: 'Insight generation',
     detail: 'Cadence: Bi-weekly → Weekly (Mon 09:00 KST)', tone: 'warn' },
@@ -247,7 +286,7 @@ const AUDIT_EVENTS = [
     detail: 'agent_1839 · 7 files · +389 −41 · awaiting human review', tone: 'accent' },
   { id: 'ev_1030', t: '21:02:00', day: 'Yesterday', actor: 'Priya Shah',  actorKind: 'human',  type: 'approval',
     title: 'Approved proposal P-234',               target: 'Per-speaker volume normalization',
-    detail: 'via Slack · auto-dispatched to Auto-Dev', tone: 'accent' },
+    detail: 'via Slack · auto-dispatched to Auto-Dev', tone: 'good' },
   { id: 'ev_1029', t: '18:45:33', day: 'Yesterday', actor: 'system',      actorKind: 'system', type: 'security',
     title: 'API key rotated',                       target: 'Anthropic API',
     detail: 'Quarterly auto-rotation · old key revoked', tone: 'warn' },
@@ -261,5 +300,3 @@ const AUDIT_EVENTS = [
     title: 'Weekly insight batch',                  target: '12 clusters → 8 proposals',
     detail: 'claude-opus-4-7 · cost $2.84 · avg confidence 0.86', tone: 'purple' },
 ];
-
-Object.assign(window, { RAW_REVIEWS, AUDIT_EVENTS });

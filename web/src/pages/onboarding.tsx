@@ -2,7 +2,17 @@
 // Onboarding — first-run setup wizard (modal)
 // ============================================================
 
-const STEPS = [
+import { Fragment, useState } from 'react';
+import type { ReactNode } from 'react';
+import { Icons } from '../components/icons';
+import { Card, Badge, Button, SourceChip } from '../components/ui';
+
+interface Step {
+  key: string;
+  label: string;
+}
+
+const STEPS: Step[] = [
   { key: 'product',     label: 'Product' },
   { key: 'repo',        label: 'Connect repo' },
   { key: 'sources',     label: 'Review sources' },
@@ -13,7 +23,7 @@ const STEPS = [
   { key: 'review',      label: 'Review & finish' },
 ];
 
-function OnboardingFlow({ onClose }) {
+export function OnboardingFlow({ onClose }: { onClose: () => void }) {
   const [idx, setIdx] = useState(0);
   const step = STEPS[idx];
 
@@ -71,7 +81,11 @@ function OnboardingFlow({ onClose }) {
   );
 }
 
-function StepHeader({ title, sub }) {
+interface StepHeaderProps {
+  title: ReactNode;
+  sub?: ReactNode;
+}
+function StepHeader({ title, sub }: StepHeaderProps) {
   return (
     <div style={{ marginBottom: 22 }}>
       <div style={{ fontSize: 22, fontWeight: 500, color: 'var(--fg-strong)', letterSpacing: '-0.02em' }}>{title}</div>
@@ -94,7 +108,7 @@ function StepProduct() {
         <FormRow label="Primary user language(s)" hint="Reviews in other languages are translated before classification.">
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {['English', 'Korean', 'Japanese', 'German', 'French'].map(l =>
-              <Badge key={l} tone={l === 'English' || l === 'Korean' ? 'accent' : ''} subtle>{l}{(l === 'English' || l === 'Korean') && ' ✓'}</Badge>
+              <Badge key={l} tone={l === 'English' || l === 'Korean' ? 'good' : ''} subtle>{l}{(l === 'English' || l === 'Korean') && ' ✓'}</Badge>
             )}
           </div>
         </FormRow>
@@ -122,7 +136,7 @@ function StepRepo() {
             <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-strong)' }}>loop / loop-app</div>
             <div style={{ fontSize: 11.5, color: 'var(--fg-muted)' }} className="mono">main · 247k LOC · 14 contributors · last commit 6m ago</div>
           </div>
-          <Badge tone="accent" dot>Connected</Badge>
+          <Badge tone="good" dot>Connected</Badge>
         </div>
       </Card>
 
@@ -147,8 +161,8 @@ function StepRepo() {
 }
 
 function StepSources() {
-  const [picked, setPicked] = useState(['appstore', 'playstore', 'reddit', 'twitter']);
-  const all = [
+  const [picked, setPicked] = useState<string[]>(['appstore', 'playstore', 'reddit', 'twitter']);
+  const all: { k: string; l: string; d: string }[] = [
     { k: 'appstore',  l: 'Apple App Store',  d: 'Reviews via App Store Connect' },
     { k: 'playstore', l: 'Google Play',      d: 'Reviews via Play Developer API' },
     { k: 'reddit',    l: 'Reddit',           d: 'Subreddit / keyword crawl' },
@@ -158,7 +172,7 @@ function StepSources() {
     { k: 'discord',   l: 'Discord',          d: 'Community server' },
     { k: 'web',       l: 'Custom URL / RSS', d: 'Any public reviews page' },
   ];
-  const toggle = (k) => setPicked(p => p.includes(k) ? p.filter(x => x !== k) : [...p, k]);
+  const toggle = (k: string) => setPicked(p => p.includes(k) ? p.filter(x => x !== k) : [...p, k]);
   return (
     <Fragment>
       <StepHeader title="Where should SelfHeal listen?" sub="Pick all the places your users talk about Loop." />
@@ -258,7 +272,11 @@ function StepSkills() {
   );
 }
 
-function Setting2({ label, v }) {
+interface Setting2Props {
+  label: ReactNode;
+  v: ReactNode;
+}
+function Setting2({ label, v }: Setting2Props) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr auto', gap: 8, alignItems: 'center' }}>
       <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{label}</div>
@@ -268,7 +286,12 @@ function Setting2({ label, v }) {
   );
 }
 
-function CostStat({ label, v, sub }) {
+interface CostStatProps {
+  label: ReactNode;
+  v: ReactNode;
+  sub: ReactNode;
+}
+function CostStat({ label, v, sub }: CostStatProps) {
   return (
     <div>
       <div className="t-caps">{label}</div>
@@ -290,7 +313,7 @@ function StepIntegrations() {
               <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-strong)' }}>Slack — Loop HQ</div>
               <div style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>Posts proposal cards to #selfheal-review · 3 channels configured</div>
             </div>
-            <Badge tone="accent" dot>Connected</Badge>
+            <Badge tone="good" dot>Connected</Badge>
           </div>
         </Card>
         <Card>
@@ -300,7 +323,7 @@ function StepIntegrations() {
               <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-strong)' }}>GitHub — loop/loop-app</div>
               <div style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}>Opens issues on approval · Auto-Dev pushes branches</div>
             </div>
-            <Badge tone="accent" dot>Connected</Badge>
+            <Badge tone="good" dot>Connected</Badge>
           </div>
         </Card>
         <Card>
@@ -387,7 +410,12 @@ function StepReview() {
   );
 }
 
-function FormRow({ label, hint, children }) {
+interface FormRowProps {
+  label: ReactNode;
+  hint?: ReactNode;
+  children?: ReactNode;
+}
+function FormRow({ label, hint, children }: FormRowProps) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: 18, alignItems: 'start' }}>
       <div>
@@ -398,5 +426,3 @@ function FormRow({ label, hint, children }) {
     </div>
   );
 }
-
-window.OnboardingFlow = OnboardingFlow;

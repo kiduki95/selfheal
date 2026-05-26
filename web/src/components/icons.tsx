@@ -2,7 +2,9 @@
 // SelfHeal — Icon set (inline SVG)
 // ============================================================
 
-const SVG = ({ children, fill, ...rest }) => (
+import type { FC, SVGProps } from 'react';
+
+const SVG: FC<SVGProps<SVGSVGElement>> = ({ children, fill, ...rest }) => (
   <svg
     width="14" height="14" viewBox="0 0 24 24"
     fill={fill || "none"}
@@ -15,10 +17,9 @@ const SVG = ({ children, fill, ...rest }) => (
     {children}
   </svg>
 );
-const P = ({ d, ...r }) => <path d={d} {...r} />;
-const C = (cx, cy, r, fill) => <circle cx={cx} cy={cy} r={r} fill={fill || 'none'} />;
+const P: FC<{ d: string } & SVGProps<SVGPathElement>> = ({ d, ...r }) => <path d={d} {...r} />;
 
-const Icons = {
+export const Icons = {
   Home:       (p) => <SVG {...p}><P d="M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6h-6v6H4a1 1 0 01-1-1v-9z" /></SVG>,
   Inbox:      (p) => <SVG {...p}><P d="M3 5h18v9h-6l-2 3h-2l-2-3H3V5zm0 9v4a1 1 0 001 1h16a1 1 0 001-1v-4" /></SVG>,
   Graph:      (p) => <SVG {...p}>
@@ -99,6 +100,6 @@ const Icons = {
   </SVG>,
   Github:     (p) => <SVG {...p}><P fill="currentColor" stroke="none" d="M12 2a10 10 0 00-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.34 1.08 2.92.83.09-.65.35-1.09.63-1.34-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.5 9.5 0 015 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.6 1.03 2.69 0 3.84-2.34 4.69-4.57 4.94.36.31.68.92.68 1.86v2.76c0 .27.18.58.69.48A10 10 0 0012 2z" /></SVG>,
   Folder:     (p) => <SVG {...p}><P d="M3 6a1 1 0 011-1h5l2 2h9a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V6z" /></SVG>,
-};
+} satisfies Record<string, FC<SVGProps<SVGSVGElement>>>;
 
-window.Icons = Icons;
+export type IconName = keyof typeof Icons;

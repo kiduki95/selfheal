@@ -4,6 +4,13 @@
 // Maps repo modules / features against review clusters.
 // Variants (tweak): tree | radial | force
 
+import { Fragment, useState, useMemo } from 'react';
+import { Icons } from '../components/icons';
+import { Card, Badge, Button, SourceChip } from '../components/ui';
+import { useOverlays } from '../components/overlays';
+import { MODULES, REVIEWS } from '../data/mock';
+import type { RepoModule } from '../data/mock';
+
 const GRAPH_W = 1180;
 const GRAPH_H = 640;
 
@@ -11,9 +18,19 @@ const GRAPH_H = 640;
 const MOD_ORDER = ['transcribe', 'summary', 'integrations', 'mobile', 'collab', 'auth'];
 const ORPHAN_ORDER = ['orphan_teams', 'orphan_offline', 'orphan_widget'];
 
+// A laid-out node rectangle. `angle` is only set by the radial layout.
+interface NodePos {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  angle?: number;
+}
+type Positions = Record<string, NodePos>;
+
 // ----- Layout: TREE --------------------------------------------------------
-function computeTreeLayout() {
-  const positions = {};
+function computeTreeLayout(): Positions {
+  const positions: Positions = {};
   const featW = 116;
   const featH = 36;
   const modW = 140;
@@ -66,8 +83,8 @@ function computeTreeLayout() {
 }
 
 // ----- Layout: RADIAL ------------------------------------------------------
-function computeRadialLayout() {
-  const positions = {};
+function computeRadialLayout(): Positions {
+  const positions: Positions = {};
   const cx = GRAPH_W / 2 - 100;
   const cy = GRAPH_H / 2 - 30;
 
@@ -89,7 +106,7 @@ function computeRadialLayout() {
   MOD_ORDER.forEach((modId) => {
     const mp = positions[modId];
     const feats = MODULES.filter((m) => m.parent === modId);
-    const baseAngle = mp.angle;
+    const baseAngle = mp.angle ?? 0;
     const spread = Math.PI / 6;
     feats.forEach((f, i) => {
       const offset = feats.length === 1 ? 0 : -spread / 2 + (i / (feats.length - 1)) * spread;
@@ -116,9 +133,9 @@ function computeRadialLayout() {
 }
 
 // ----- Layout: FORCE (pre-computed pseudo-force) ---------------------------
-function computeForceLayout() {
+function computeForceLayout(): Positions {
   // Hand-tuned "force-directed-looking" positions
-  const positions = {
+  const positions: Positions = {
     root:         { x: 540, y: 290, w: 160, h: 50 },
 
     transcribe:   { x: 230, y: 110, w: 140, h: 48 },
@@ -160,7 +177,7 @@ function computeForceLayout() {
 }
 
 // ----- Edge path (smooth cubic bezier) -------------------------------------
-function edgePath(a, b) {
+function edgePath(a: NodePos, b: NodePos): string {
   const x1 = a.x + a.w / 2;
   const y1 = a.y + a.h;
   const x2 = b.x + b.w / 2;
@@ -169,7 +186,7 @@ function edgePath(a, b) {
   return `M${x1},${y1} C${x1},${y1 + dy * 0.5} ${x2},${y2 - dy * 0.5} ${x2},${y2}`;
 }
 
-function edgePathAny(a, b) {
+function edgePathAny(a: NodePos, b: NodePos): string {
   const x1 = a.x + a.w / 2;
   const y1 = a.y + a.h / 2;
   const x2 = b.x + b.w / 2;
@@ -179,33 +196,39 @@ function edgePathAny(a, b) {
   return `M${x1},${y1} Q${mx},${my} ${x2},${y2}`;
 }
 
+interface Edge {
+  from: string;
+  to: string;
+  dashed: boolean;
+}
+
 // ----- Page ----------------------------------------------------------------
-function ProcessingPage({ graphStyle }) {
-  const [selected, setSelected] = useState('t_ko');
-  const [showRaw, setShowRaw] = useState(false);
+export function ProcessingPage({ graphStyle }: { graphStyle: 'tree' | 'radial' | 'force' }) {
+  const [selected, setSelected] = useState<string | null>('t_ko');
+  const [showRaw] = useState(false);
   const overlays = useOverlays();
 
-  const positions = useMemo(() => {
+  const positions = useMemo<Positions>(() => {
     if (graphStyle === 'radial') return computeRadialLayout();
     if (graphStyle === 'force')  return computeForceLayout();
     return computeTreeLayout();
   }, [graphStyle]);
 
   // Build edges from parent relations
-  const edges = useMemo(() => {
+  const edges = useMemo<Edge[]>(() => {
     return MODULES
       .filter((m) => m.parent && positions[m.id] && positions[m.parent])
-      .map((m) => ({ from: m.parent, to: m.id, dashed: false }));
+      .map((m) => ({ from: m.parent as string, to: m.id, dashed: false }));
   }, [positions]);
 
   const selectedNode = MODULES.find((m) => m.id === selected);
-  const reviews = REVIEWS[selected] || [];
+  const reviews = (selected ? REVIEWS[selected] : undefined) || [];
 
   return (
     <Fragment>
       {/* Toolbar */}
       <div className="graph-toolbar">
-        <Badge dot tone="accent">Live · last sync 2m ago</Badge>
+        <Badge dot tone="good">Live · last sync 2m ago</Badge>
         <span className="dot-divider">·</span>
         <span style={{ fontSize: 12, color: 'var(--fg-muted)' }} className="mono">loop-app @ a3f9c1d · main</span>
         <div className="spacer" />
@@ -214,7 +237,7 @@ function ProcessingPage({ graphStyle }) {
           <span style={{ fontSize: 11 }} className="mono">reviews / 7d</span>
           <div style={{ display: 'flex', gap: 2, marginLeft: 4 }}>
             {[0.1, 0.25, 0.45, 0.7, 0.95].map((a, i) =>
-              <div key={i} style={{ width: 10, height: 10, borderRadius: 2, background: `rgba(0, 212, 168, ${a})` }} />
+              <div key={i} style={{ width: 10, height: 10, borderRadius: 2, background: `color-mix(in srgb, var(--accent) ${Math.round(a * 100)}%, transparent)` }} />
             )}
           </div>
         </div>
@@ -351,7 +374,7 @@ function ProcessingPage({ graphStyle }) {
                     <SourceChip src={r.src} />
                     {r.rating != null && <span className="badge subtle" style={{ fontSize: 10.5 }}>★ {r.rating}</span>}
                     <span className="badge subtle" style={{ fontSize: 10.5 }}>{r.lang}</span>
-                    <span className={`badge subtle ${r.sentiment === 'neg' ? 'danger' : r.sentiment === 'pos' ? 'accent' : ''}`} style={{ marginLeft: 'auto', fontSize: 10.5 }}>
+                    <span className={`badge subtle ${r.sentiment === 'neg' ? 'danger' : r.sentiment === 'pos' ? 'good' : ''}`} style={{ marginLeft: 'auto', fontSize: 10.5 }}>
                       {r.sentiment}
                     </span>
                     <span className="mono" style={{ fontSize: 10, color: 'var(--fg-subtle)' }}>{r.date}</span>
@@ -417,7 +440,13 @@ function ProcessingPage({ graphStyle }) {
 }
 
 // ----- Node ----------------------------------------------------------------
-function GraphNode({ m, p, selected, onClick }) {
+interface GraphNodeProps {
+  m: RepoModule;
+  p: NodePos;
+  selected: boolean;
+  onClick: () => void;
+}
+function GraphNode({ m, p, selected, onClick }: GraphNodeProps) {
   const max = 312;
   const heatPct = Math.min(1, m.heat / max);
   const isHot = heatPct > 0.5;
@@ -473,5 +502,3 @@ function GraphNode({ m, p, selected, onClick }) {
     </div>
   );
 }
-
-window.ProcessingPage = ProcessingPage;
