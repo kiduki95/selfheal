@@ -24,11 +24,15 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
   ))[0]!.id;
 
   try {
+    // Whole destructive rebuild (DELETE + re-INSERT of nodes/edges/features) runs in ONE transaction
+    // so a mid-scan failure rolls back to the prior graph instead of leaving the repo half-wiped.
+    // The codeflow_runs row stays on the pool (outside the tx) so its status survives a rollback.
+    const { edgeCount, byKind } = await db.transaction(async (tx) => {
     // 전체 재수집: repo 범위 초기화 (FK: code_edges → code_artifact_registry)
-    await db.query(`DELETE FROM code_edges WHERE repo = $1`, [scan.repo]);
-    await db.query(`DELETE FROM code_artifact_registry WHERE repo = $1`, [scan.repo]);
+    await tx.query(`DELETE FROM code_edges WHERE repo = $1`, [scan.repo]);
+    await tx.query(`DELETE FROM code_artifact_registry WHERE repo = $1`, [scan.repo]);
     // 이 repo의 code-derived feature도 초기화 (review-emergent gap은 보존)
-    await db.query(`DELETE FROM feature_registry WHERE origin = 'code_derived' AND repo = $1`, [scan.repo]);
+    await tx.query(`DELETE FROM feature_registry WHERE origin = 'code_derived' AND repo = $1`, [scan.repo]);
 
     // 1) 노드 insert → key→id 매핑
     const idByKey = new Map<string, string>();
@@ -36,7 +40,7 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
     for (const n of scan.nodes) {
       const { vector } = await embedder.embed(n.description);
       const risk = classifyCodeRisk(n.path, n.module, n.symbol, n.signature);
-      const rows = await db.query<{ id: string }>(
+      const rows = await tx.query<{ id: string }>(
         `INSERT INTO code_artifact_registry
            (repo, path, module, symbol, kind, signature, content_hash, description, embedding, risk_tier, risk_score)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::vector,$10,$11)
@@ -53,7 +57,7 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
       const src = idByKey.get(e.srcKey);
       const dst = idByKey.get(e.dstKey);
       if (!src || !dst) continue;
-      await db.query(
+      await tx.query(
         `INSERT INTO code_edges (repo, src_id, dst_id, kind) VALUES ($1,$2,$3,$4)
          ON CONFLICT (src_id, dst_id, kind) DO NOTHING`,
         [scan.repo, src, dst, e.kind],
@@ -76,7 +80,7 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
         } catch { /* enrich 실패 → 원본 유지 */ }
       }
       const { vector } = await embedder.embed(`${label} ${desc}`);
-      const frows = await db.query<{ id: string }>(
+      const frows = await tx.query<{ id: string }>(
         `INSERT INTO feature_registry (canonical_slug, pref_label, description, embedding, origin, status, repo)
          VALUES ($1,$2,$3,$4::vector,'code_derived','grounded',$5)
          ON CONFLICT (canonical_slug) DO UPDATE
@@ -90,7 +94,7 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
       const memberIds = f.memberKeys.map((k) => idByKey.get(k)).filter((x): x is string => !!x);
       if (memberIds.length) {
         // 누적(append+distinct) — 한 아티팩트가 모듈 feature + 컴포넌트 feature 둘 다에 속할 수 있음
-        await db.query(
+        await tx.query(
           `UPDATE code_artifact_registry
            SET feature_ids = ARRAY(SELECT DISTINCT unnest(feature_ids || ARRAY[$1]::uuid[]))
            WHERE id = ANY($2::uuid[])`,
@@ -106,14 +110,14 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
           const sslug = `${scan.repo}#${f.slug}.${s.label.toLowerCase().replace(/\s+/g, '-')}`.slice(0, 200);
           const desc = s.description + (s.anchors.length ? ` [anchors: ${s.anchors.join(', ')}]` : '');
           const { vector: sv } = await embedder.embed(`${s.label} ${s.description} ${s.anchors.join(' ')}`);
-          const srows = await db.query<{ id: string }>(
+          const srows = await tx.query<{ id: string }>(
             `INSERT INTO feature_registry (canonical_slug, pref_label, description, embedding, origin, status, repo, parent_id)
              VALUES ($1,$2,$3,$4::vector,'code_derived','grounded',$5,$6)
              ON CONFLICT (canonical_slug) DO UPDATE SET pref_label=EXCLUDED.pref_label, description=EXCLUDED.description, embedding=EXCLUDED.embedding, parent_id=EXCLUDED.parent_id
              RETURNING id`,
             [sslug, s.label, desc, toSqlVector(sv), scan.repo, fid],
           );
-          if (fileId) await db.query(`UPDATE code_artifact_registry SET feature_ids = ARRAY(SELECT DISTINCT unnest(feature_ids || ARRAY[$1]::uuid[])) WHERE id = $2`, [srows[0]!.id, fileId]);
+          if (fileId) await tx.query(`UPDATE code_artifact_registry SET feature_ids = ARRAY(SELECT DISTINCT unnest(feature_ids || ARRAY[$1]::uuid[])) WHERE id = $2`, [srows[0]!.id, fileId]);
           subCount++;
         }
       }
@@ -123,10 +127,12 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
       if (!f.parentSlug) continue;
       const childId = idBySlug.get(f.slug);
       const parentId = idBySlug.get(f.parentSlug);
-      if (childId && parentId) await db.query(`UPDATE feature_registry SET parent_id = $2 WHERE id = $1`, [childId, parentId]);
+      if (childId && parentId) await tx.query(`UPDATE feature_registry SET parent_id = $2 WHERE id = $1`, [childId, parentId]);
     }
     if (enriched) console.log(`  ② enriched ${enriched} component features (user-facing labels)`);
     if (subCount) console.log(`  ① decomposed into ${subCount} sub-features`);
+    return { edgeCount, byKind };
+    }); // end transaction — graph fully swapped or fully rolled back
 
     await db.query(
       `UPDATE codeflow_runs SET status='done', nodes_total=$2, edges_total=$3, features_total=$4, finished_at=now() WHERE id=$1`,

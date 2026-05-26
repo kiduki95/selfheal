@@ -30,5 +30,8 @@ describe.skipIf(!reachable)('semantic cache hit enqueues gap/enhancement (#5)', 
     // and it actually landed in the queue table
     const q = await db.query<{ n: string }>(`SELECT count(*) n FROM human_review_queue WHERE reason='feature_gap'`);
     expect(Number(q[0]!.n)).toBe(2);
+    // The same unified post-branch block now also recomputes escalation reasons (critical/refund_legal/
+    // low_confidence) from the finalized inferences, so a cache hit no longer drops them. The reasons
+    // themselves are unit-tested in escalation.test.ts; this test guards that the block runs on cache hits.
   });
 });

@@ -6,6 +6,11 @@ import type { Inferences, ProcessedReview } from '../contracts/processed-review.
 
 const { Pool } = pg;
 
+// Minimal query surface a transaction callback runs against (same shape as Db.query).
+export interface Tx {
+  query<T = any>(sql: string, params?: unknown[]): Promise<T[]>;
+}
+
 export interface RawReviewRow {
   id: string;
   source: string;
@@ -44,6 +49,30 @@ export class Db {
   }
   async close() {
     await this.pool.end();
+  }
+
+  // Run `fn` inside a single BEGIN/COMMIT on a dedicated client; ROLLBACK on throw. The callback
+  // gets a Tx with the same query() shape so call sites stay identical. Used by destructive rebuilds
+  // (e.g. codeflow persistScan) so a mid-scan failure can't leave the graph half-wiped.
+  async transaction<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const tx: Tx = {
+        async query<R = any>(sql: string, params: unknown[] = []): Promise<R[]> {
+          const res = await client.query(sql, params as any[]);
+          return res.rows as R[];
+        },
+      };
+      const out = await fn(tx);
+      await client.query('COMMIT');
+      return out;
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch { /* connection may be gone; pool will discard it */ }
+      throw e;
+    } finally {
+      client.release();
+    }
   }
 
   // --- raw_reviews ---

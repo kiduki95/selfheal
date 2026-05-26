@@ -22,6 +22,7 @@ import { config } from '../../config.js';
 import { aggregateSignal, recordResolutionReport } from '../stages/aggregate-signal.js';
 import { canonicalizeErrorSignature } from '../../util/error-signature.js';
 import { simhash64 } from '../../util/simhash.js';
+import { escalationReasons, isLowConfidence } from '../escalation.js';
 
 // per-review 처리 결과 요약 (funnel/관찰가능성용)
 export interface ProcessOutcome {
@@ -142,12 +143,10 @@ export async function processReview(raw: unknown, ctx: PipelineCtx): Promise<Pro
         return { value: r, llm_call: call };
       }),
     );
-    humanReasons = cls.human_review_reasons;
-    lowConf = cls.low_confidence;
     const c = cls.result;
     m.inc('classify.total');
     if (cls.result.escalated) m.inc('classify.escalated');
-    if (lowConf) m.inc('classify.low_confidence');
+    if (cls.low_confidence) m.inc('classify.low_confidence');
 
     // 4.7' mapFeature (P1, Claude-as-judge) — actionable 카테고리만. grounded/defective/gap.
     let featureMapping: Inferences['extraction']['feature_mapping'] = null;
@@ -190,6 +189,18 @@ export async function processReview(raw: unknown, ctx: PipelineCtx): Promise<Pro
     };
 
   }
+
+  // Escalation reasons (critical/refund_legal/low_confidence) recomputed from the finalized
+  // inferences on BOTH paths. Cache HIT reuses cached inferences and skips classify, so deriving
+  // here (not only inside the classify stage) ensures cache hits still escalate to the human queue.
+  humanReasons.push(
+    ...escalationReasons({
+      severity: inferences.classification.severity,
+      categoryConfidence: inferences.classification.category_confidence,
+      text: `${facts.text_redacted} ${inferences.text_en ?? ''}`,
+    }),
+  );
+  lowConf = isLowConfidence(inferences.classification.category_confidence);
 
   // gap → Insight 큐, enhancement → 개선 요청 큐. inferences 기준이라 cache HIT 리뷰도 큐잉됨 (#5 fix —
   // 이전엔 miss 분기에만 있어 캐시 히트 시 gap/enhancement가 사람 큐에서 누락됐다).

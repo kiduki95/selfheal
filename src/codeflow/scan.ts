@@ -72,6 +72,11 @@ export function scanRepo(opts: ScanOptions): ScanResult {
   const moduleSet = new Set<string>();
   // For calls edges: per file, which local name binds to which imported symbol+target, and which names are actually used.
   const callBindings = new Map<string, Map<string, { importedName: string; toRel: string }>>();
+  const defaultBindings = new Map<string, Map<string, string>>(); // file → (localName → toRel) for `import X from './m'`
+  const defaultNameByFile = new Map<string, string>(); // fileKey → its default export's symbol name (resolves default imports)
+  // Free uses = identifiers called/rendered that are NOT bound in their own scope chain, so they
+  // refer to an outer/import binding. Scope-aware (vs a flat name set) so a local that shadows an
+  // import suppresses only the calls in its own scope, not a same-named import use in a sibling scope.
   const usedNames = new Map<string, Set<string>>();
 
   for (const abs of files) {
@@ -104,17 +109,33 @@ export function scanRepo(opts: ScanOptions): ScanResult {
         if (spec.startsWith('.') || spec.startsWith('@/')) {
           const toRel = resolveImport(relPath, spec);
           importPairs.push({ fromFile: relPath, toRel });
-          // Capture named-import bindings: localName → { importedName (handles `as`), target }.
           const clause = stmt.importClause;
+          // Capture named-import bindings: localName → { importedName (handles `as`), target }.
           if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
             const binds = callBindings.get(relPath) ?? new Map();
             for (const el of clause.namedBindings.elements) binds.set(el.name.text, { importedName: (el.propertyName ?? el.name).text, toRel });
             callBindings.set(relPath, binds);
           }
+          // Capture default-import binding: `import X from './m'` → X resolves to m's default export symbol.
+          if (clause?.name) {
+            const dbinds = defaultBindings.get(relPath) ?? new Map<string, string>();
+            dbinds.set(clause.name.text, toRel);
+            defaultBindings.set(relPath, dbinds);
+          }
         }
         continue;
       }
+      // Record this file's default export name so default imports elsewhere resolve to a real symbol node.
+      // Limitation: `export default Foo` where Foo is a non-exported local creates no symbol node, so the
+      // default-import edge won't resolve (guarded by nodeKeySet below — degrades to a missing edge, never
+      // a dangling one). The common `export default function/class Foo` form (below) does resolve.
+      if (ts.isExportAssignment(stmt) && !stmt.isExportEquals && ts.isIdentifier(stmt.expression)) {
+        defaultNameByFile.set(relPath, stmt.expression.text);
+      }
       if (!isExported(stmt)) continue;
+      if (hasDefaultModifier(stmt) && (ts.isFunctionDeclaration(stmt) || ts.isClassDeclaration(stmt)) && stmt.name) {
+        defaultNameByFile.set(relPath, stmt.name.text);
+      }
       for (const sym of declaredSymbols(stmt, sf)) {
         const symKey = `${relPath}#${sym.name}`;
         nodes.push({
@@ -132,7 +153,7 @@ export function scanRepo(opts: ScanOptions): ScanResult {
         pushMember(moduleMembers, module, symKey);
       }
     }
-    usedNames.set(relPath, collectUsedNames(sf)); // call/JSX/new usages → calls edges below
+    usedNames.set(relPath, collectFreeUses(sf)); // free call/JSX/new usages → calls edges below
   }
 
   // module 노드 + module→file contains
@@ -166,14 +187,21 @@ export function scanRepo(opts: ScanOptions): ScanResult {
   const callSeen = new Set<string>();
   for (const [fromFile, used] of usedNames) {
     const binds = callBindings.get(fromFile);
-    if (!binds) continue;
+    const dbinds = defaultBindings.get(fromFile);
+    if (!binds && !dbinds) continue;
     for (const name of used) {
-      const b = binds.get(name);
-      if (!b) continue;
-      const dstFile = resolveToFileKey(b.toRel, fileKeyByPath);
-      if (!dstFile || dstFile === fromFile) continue;
-      const dstKey = `${dstFile}#${b.importedName}`;
-      if (!nodeKeySet.has(dstKey)) continue; // only intra-repo exported symbols we tracked
+      // `name` is a free use (not shadowed by a local in its scope), so it may bind to an import.
+      let dstKey: string | undefined;
+      const b = binds?.get(name);
+      if (b) {
+        const dstFile = resolveToFileKey(b.toRel, fileKeyByPath);
+        if (dstFile && dstFile !== fromFile) dstKey = `${dstFile}#${b.importedName}`;
+      } else if (dbinds?.has(name)) {
+        const dstFile = resolveToFileKey(dbinds.get(name)!, fileKeyByPath);
+        const defName = dstFile ? defaultNameByFile.get(dstFile) : undefined;
+        if (dstFile && dstFile !== fromFile && defName) dstKey = `${dstFile}#${defName}`;
+      }
+      if (!dstKey || !nodeKeySet.has(dstKey)) continue; // only intra-repo exported symbols we tracked
       const sig = `${fromFile}->${dstKey}`;
       if (callSeen.has(sig)) continue;
       callSeen.add(sig);
@@ -249,6 +277,61 @@ function moduleOf(dirRelToRoot: string): string {
 function isExported(node: ts.Node): boolean {
   const mods = (ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined) ?? [];
   return mods.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+}
+function hasDefaultModifier(node: ts.Node): boolean {
+  const mods = (ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined) ?? [];
+  return mods.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword);
+}
+function isFunctionScope(n: ts.Node): boolean {
+  return ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n) ||
+    ts.isMethodDeclaration(n) || ts.isConstructorDeclaration(n) ||
+    ts.isGetAccessorDeclaration(n) || ts.isSetAccessorDeclaration(n);
+}
+// Names declared directly within one function scope (its params + own var/func/class/destructured
+// bindings), NOT descending into nested function scopes. Function-scope granularity is enough to
+// catch the cases that shadow imports (params, function-local consts); block scoping is ignored.
+function declaredInScope(scopeNode: ts.Node): Set<string> {
+  const names = new Set<string>();
+  const collect = (node: ts.Node, isRoot: boolean) => {
+    if (!isRoot && isFunctionScope(node)) return; // stop at nested function boundary
+    if (ts.isFunctionDeclaration(node) && node.name) names.add(node.name.text);
+    else if (ts.isClassDeclaration(node) && node.name) names.add(node.name.text);
+    else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) names.add(node.name.text);
+    else if (ts.isParameter(node) && ts.isIdentifier(node.name)) names.add(node.name.text);
+    else if (ts.isBindingElement(node) && ts.isIdentifier(node.name)) names.add(node.name.text);
+    ts.forEachChild(node, (c) => collect(c, false));
+  };
+  collect(scopeNode, true);
+  return names;
+}
+// Scope-aware free-use collection: an identifier called / instantiated / rendered (JSX) is "free"
+// when it is NOT bound anywhere in its enclosing scope chain, so it must refer to an import (or an
+// outer binding). This is what lets a local that shadows an import suppress only its own scope's
+// calls while a same-named import use in a sibling scope still yields a calls edge.
+function collectFreeUses(sf: ts.SourceFile): Set<string> {
+  const free = new Set<string>();
+  const rootId = (e: ts.Expression): string | null =>
+    ts.isIdentifier(e) ? e.text : ts.isPropertyAccessExpression(e) ? rootId(e.expression) : null;
+  const boundInChain = (chain: Set<string>[], name: string): boolean => chain.some((s) => s.has(name));
+
+  const walkScope = (scopeNode: ts.Node, parentChain: Set<string>[]) => {
+    const chain = [...parentChain, declaredInScope(scopeNode)];
+    const visit = (node: ts.Node, isScopeRoot: boolean) => {
+      if (!isScopeRoot && isFunctionScope(node)) { walkScope(node, chain); return; } // descend via own scope
+      if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+        const id = rootId(node.expression);
+        if (id && !boundInChain(chain, id)) free.add(id);
+      } else if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+        const tag = node.tagName;
+        const id = ts.isIdentifier(tag) ? tag.text : ts.isPropertyAccessExpression(tag) ? rootId(tag) : null;
+        if (id && !boundInChain(chain, id)) free.add(id);
+      }
+      ts.forEachChild(node, (c) => visit(c, false));
+    };
+    visit(scopeNode, true);
+  };
+  walkScope(sf, []);
+  return free;
 }
 
 interface SymInfo {
@@ -328,25 +411,6 @@ function resolveToFileKey(toRel: string, fileKeyByPath: Map<string, string>): st
     if (dst) return dst;
   }
   return undefined;
-}
-// Collect identifiers that are called / instantiated / rendered (JSX) — call-edge candidates.
-function collectUsedNames(sf: ts.SourceFile): Set<string> {
-  const used = new Set<string>();
-  const rootId = (e: ts.Expression): string | null =>
-    ts.isIdentifier(e) ? e.text : ts.isPropertyAccessExpression(e) ? rootId(e.expression) : null;
-  const visit = (node: ts.Node) => {
-    if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
-      const id = rootId(node.expression);
-      if (id) used.add(id);
-    } else if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
-      const tag = node.tagName;
-      if (ts.isIdentifier(tag)) used.add(tag.text);
-      else if (ts.isPropertyAccessExpression(tag)) { const r = rootId(tag); if (r) used.add(r); }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sf);
-  return used;
 }
 function pushMember(map: Map<string, string[]>, k: string, v: string): void {
   const a = map.get(k) ?? [];
