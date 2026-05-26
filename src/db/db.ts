@@ -434,6 +434,37 @@ export class Db {
   async clearProposals(repo: string): Promise<void> {
     await this.query(`DELETE FROM proposals WHERE repo = $1`, [repo]);
   }
+
+  // --- HITL approval gate (proposal_reviews) ---
+  // Resolve a (regenerated) proposal UUID → its stable identity, so the decision survives re-runs.
+  async getProposalRef(id: string): Promise<{ repo: string; kind: string; ref_id: string; title: string } | null> {
+    const rows = await this.query<{ repo: string; kind: string; ref_id: string | null; title: string }>(
+      `SELECT repo, kind, ref_id, title FROM proposals WHERE id = $1`, [id]);
+    const r = rows[0];
+    if (!r || !r.ref_id) return null; // no stable key → can't persist a decision
+    return { repo: r.repo, kind: r.kind, ref_id: r.ref_id, title: r.title };
+  }
+  // Upsert a human decision keyed on the stable identity.
+  async decideProposal(p: { repo: string; kind: string; ref_id: string; decision: string; note?: string; title?: string; by?: string }): Promise<void> {
+    await this.query(
+      `INSERT INTO proposal_reviews (repo, kind, ref_id, decision, note, decided_by, title_snap)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (repo, kind, ref_id) DO UPDATE
+         SET decision = EXCLUDED.decision, note = EXCLUDED.note, decided_by = EXCLUDED.decided_by,
+             title_snap = EXCLUDED.title_snap, decided_at = now()`,
+      [p.repo, p.kind, p.ref_id, p.decision, p.note ?? null, p.by ?? null, p.title ?? null],
+    );
+  }
+  // Approved proposals (current generation) — Auto-Dev's input queue.
+  async approvedProposals(repo: string): Promise<any[]> {
+    return this.query(
+      `SELECT p.*, pr.decided_at, pr.note AS decision_note
+       FROM proposals p JOIN proposal_reviews pr
+         ON pr.repo = p.repo AND pr.kind = p.kind AND pr.ref_id = p.ref_id
+       WHERE p.repo = $1 AND pr.decision = 'approved' ORDER BY p.priority DESC`,
+      [repo],
+    );
+  }
   async insertProposal(p: { repo: string; kind: string; ref_id: string | null; title: string; body: string; priority: number; target_module: string | null; placement: string | null; evidence: unknown }): Promise<void> {
     await this.query(
       `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence)
