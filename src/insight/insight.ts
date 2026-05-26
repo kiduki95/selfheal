@@ -34,6 +34,14 @@ export function bugPriority(f: { corroboration: number; sev: number; codeRiskTie
   return { priority, risk };
 }
 
+// #2 freshness: proposals are regenerated per insight run; if reviews were processed after the last
+// run, the proposals on screen are stale. Pure so it's testable; surfaced at the consumption point (API).
+export function proposalsStale(lastProcessed: string | null, lastProposal: string | null): boolean {
+  if (!lastProcessed) return false; // nothing processed → nothing to be stale about
+  if (!lastProposal) return true; // processed reviews but no proposals yet
+  return Date.parse(lastProcessed) > Date.parse(lastProposal);
+}
+
 export interface ProposalView {
   kind: 'bug_fix' | 'feature_gap' | 'enhancement';
   title: string;

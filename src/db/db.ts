@@ -333,6 +333,12 @@ export class Db {
       await this.query(`UPDATE signal_groups SET trend = $2 WHERE id = $1`, [g.id, deriveTrend(times, now.getTime())]);
     }
   }
+  // Freshness stamps (#2): latest processing time vs latest proposal generation time.
+  async processingStamps(repo: string): Promise<{ lastProcessed: string | null; lastProposal: string | null }> {
+    const p = await this.query<{ t: string | null }>(`SELECT max(processed_at)::text AS t FROM processed_reviews`);
+    const q = await this.query<{ t: string | null }>(`SELECT max(created_at)::text AS t FROM proposals WHERE repo = $1`, [repo]);
+    return { lastProcessed: p[0]?.t ?? null, lastProposal: q[0]?.t ?? null };
+  }
   // --- reconciliation merge (#3) ---
   async openSignalGroups(): Promise<{ id: string; error_signature: string | null; code_artifact_ids: string[]; first_seen: string }[]> {
     return this.query(`SELECT id, error_signature, code_artifact_ids, first_seen::text AS first_seen FROM signal_groups WHERE status = 'open'`);

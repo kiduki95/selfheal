@@ -2,10 +2,12 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { envelope, type ApiEnv } from '../contract.js';
+import { proposalsStale } from '../../insight/insight.js';
 
 const r = new Hono<ApiEnv>();
 
 // GET /api/proposals — Insight proposals, highest priority first, with HITL decision joined in.
+// Flags staleness (#2): if reviews were processed after the last insight run, the note warns to re-run.
 r.get('/', async (c) => {
   const rows = await c.var.db.query<any>(
     `SELECT p.id, p.kind, p.title, p.priority, p.target_module, p.placement, p.body,
@@ -16,7 +18,9 @@ r.get('/', async (c) => {
      WHERE p.repo = $1 ORDER BY p.priority DESC`,
     [c.var.repo],
   );
-  return c.json(envelope(rows, c.var.repo));
+  const { lastProcessed, lastProposal } = await c.var.db.processingStamps(c.var.repo);
+  const note = proposalsStale(lastProcessed, lastProposal) ? 'stale: reviews processed since last insight run — re-run insight (or npm run pipeline)' : undefined;
+  return c.json(envelope(rows, c.var.repo, 'live', note));
 });
 
 // --- HITL gate: approve / reject ---
