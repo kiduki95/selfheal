@@ -46,7 +46,7 @@ export const FeatureMatchSchema = z.object({
 
 // P1: review→feature 매핑 3-state (grounded/defective/gap). gap이면 feature_id=floating emergent.
 export const FeatureMappingSchema = z.object({
-  state: z.enum(['grounded', 'defective', 'gap']),
+  state: z.enum(['grounded', 'defective', 'enhancement', 'gap']),
   feature_id: z.string().nullable(),
   confidence: z.number(),
   reason: z.string().nullable(),

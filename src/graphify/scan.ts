@@ -33,6 +33,8 @@ export interface FeatureSpec {
   memberKeys: string[];
   parentSlug?: string; // 컴포넌트 feature는 모듈 feature를 parent로 (SKOS broader)
   level: 'module' | 'component';
+  uiSurface?: string; // 컴포넌트 내부 UI 요소(헤딩/Label/htmlFor/탭값) — sub-feature 열거 재료
+  fileKey?: string; // 컴포넌트가 사는 파일 노드 key (sub-feature 앵커)
 }
 export interface ScanResult {
   repo: string;
@@ -63,6 +65,7 @@ export function scanRepo(opts: ScanOptions): ScanResult {
   const edges: EdgeSpec[] = [];
   const fileKeyByPath = new Map<string, string>();
   const fileModule = new Map<string, string>(); // fileKey → module
+  const uiSurfaceByFile = new Map<string, string>(); // fileKey → UI surface
   const moduleMembers = new Map<string, string[]>();
   const importPairs: { fromFile: string; toRel: string }[] = [];
   const moduleSet = new Set<string>();
@@ -75,6 +78,7 @@ export function scanRepo(opts: ScanOptions): ScanResult {
     const fileKey = relPath;
     fileKeyByPath.set(relPath, fileKey);
     fileModule.set(fileKey, module);
+    uiSurfaceByFile.set(fileKey, extractUiSurface(text));
 
     nodes.push({
       key: fileKey,
@@ -173,6 +177,8 @@ export function scanRepo(opts: ScanOptions): ScanResult {
       memberKeys: [n.key, n.path], // 심볼 노드 + 파일 노드 → 파일 단위 grounding
       parentSlug: slugify(n.module),
       level: 'component' as const,
+      uiSurface: uiSurfaceByFile.get(n.path),
+      fileKey: n.path,
     }));
   const features: FeatureSpec[] = [...moduleFeatures, ...componentFeatures];
 
@@ -237,6 +243,17 @@ function declaredSymbols(stmt: ts.Statement, sf: ts.SourceFile): SymInfo[] {
 // PascalCase 컴포넌트/클래스/페이지만; ui 프리미티브·타입·유틸·Next 노이즈 제외.
 const EXCLUDE_MODULES = /^(components\/ui|lib|hooks|core)$/;
 const NOISE_SYMBOLS = new Set(['Loading', 'RootLayout', 'Layout', 'Metadata', 'metadata', 'ThemeProvider', 'Toaster', 'Provider']);
+// 컴포넌트 파일에서 사용자 대면 UI 요소 추출 (헤딩/Label 텍스트/htmlFor id/탭값) — sub-feature 열거 재료.
+export function extractUiSurface(text: string): string {
+  const items = new Set<string>();
+  const add = (re: RegExp) => { for (const m of text.matchAll(re)) { const v = (m[1] ?? '').trim(); if (v.length >= 2 && v.length <= 40 && !/[{}<>]/.test(v)) items.add(v); } };
+  add(/<h[1-4][^>]*>\s*([^<>{}\n]{2,40})/g); // 섹션 헤딩
+  add(/<Label[^>]*>\s*([^<>{}\n]{2,40})/g); // 라벨 텍스트
+  add(/htmlFor="([a-zA-Z0-9_-]{3,40})"/g); // 폼 컨트롤 id (rsi-condition, golden-cross-condition …)
+  add(/TabsTrigger[^>]*value="([a-zA-Z0-9_-]{2,30})"/g); // 탭
+  return [...items].slice(0, 40).join(' | ').slice(0, 800);
+}
+
 function isFeatureWorthy(n: ArtifactNode): boolean {
   if (n.kind !== 'symbol' || !n.symbol) return false;
   if (!['function', 'class', 'var'].includes(n.symbolKind ?? '')) return false; // 타입/인터페이스/enum 제외

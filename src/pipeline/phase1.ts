@@ -189,8 +189,9 @@ export async function processReview(raw: unknown, ctx: PipelineCtx): Promise<Pro
       is_actionable: isActionable,
     };
 
-    // gap feature → Insight 검토 큐 (어느 모듈에 추가할지 제안 대상)
+    // gap → Insight 큐(어느 모듈에 추가할지), enhancement → 개선 요청 큐
     if (featureMapping?.state === 'gap') humanReasons.push('feature_gap');
+    else if (featureMapping?.state === 'enhancement') humanReasons.push('feature_enhancement');
   }
 
   // --- 분포/품질 metric (classified·cache_hit 양쪽 공통, inferences 기준) ---

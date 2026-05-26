@@ -10,6 +10,8 @@ import type {
   MapFeatureOutput,
   DescribeFeatureInput,
   DescribeFeatureOutput,
+  EnumerateSubFeaturesInput,
+  EnumerateSubFeaturesOutput,
 } from './types.js';
 import type { Category } from '../../contracts/processed-review.js';
 
@@ -228,7 +230,7 @@ export class StubLlmClient implements LlmClient {
     }
     const bugword = /(안\s*떠|안\s*돼|안돼|튕|강제종료|멈춤|크래시|crash|error|에러|오류|freeze|버벅|느려|죽)/.test(hay);
     if (best && best.score >= 1) {
-      const state = bugword || input.category === 'bug' ? 'defective' : 'grounded';
+      const state = bugword || input.category === 'bug' ? 'defective' : input.category === 'feature_request' ? 'enhancement' : 'grounded';
       return { state, feature_id: best.id, confidence: Math.min(0.9, 0.5 + best.score * 0.15), reason: `stub keyword overlap=${best.score}` };
     }
     return { state: 'gap', feature_id: null, confidence: 0.6, reason: 'stub: no candidate feature matched' };
@@ -237,6 +239,11 @@ export class StubLlmClient implements LlmClient {
   // ② 설명 보강 stub — enrich 안 함(심볼명 그대로). 진짜 사용자어 라벨은 claude-cli.
   async describeFeature(input: DescribeFeatureInput): Promise<DescribeFeatureOutput> {
     return { label: input.symbol, description: `${input.module} · ${input.signature}`.slice(0, 160) };
+  }
+
+  // ① sub-feature 열거 stub — 분해 안 함(claude-cli 전용). 빈 배열.
+  async enumerateSubFeatures(_input: EnumerateSubFeaturesInput): Promise<EnumerateSubFeaturesOutput> {
+    return { subFeatures: [] };
   }
 }
 

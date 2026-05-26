@@ -176,20 +176,16 @@ export class Db {
 
   // --- P1: feature mapping (Claude-as-judge) ---
   // 타깃 repo의 grounded feature 후보 전체 (소규모 codebase는 임베딩 추림 없이 전부 LLM에).
-  async featureCandidates(targetRepo: string, limit = 60): Promise<{ feature_id: string; label: string; description: string }[]> {
-    // leaf(컴포넌트, parent_id NOT NULL) feature 우선 — grounding이 파일 단위로 내려감.
-    const leaves = await this.query<{ feature_id: string; label: string; description: string }>(
-      `SELECT id AS feature_id, pref_label AS label, COALESCE(description,'') AS description
-       FROM feature_registry WHERE status='grounded' AND repo=$1 AND parent_id IS NOT NULL ORDER BY pref_label LIMIT $2`,
+  async featureCandidates(targetRepo: string, limit = 90): Promise<{ feature_id: string; label: string; description: string }[]> {
+    // 컴포넌트 + sub-feature 둘 다 후보(모듈만 제외). Claude가 적절한 granularity를 고름 —
+    // 일반적 리뷰는 컴포넌트, 구체적 리뷰는 sub-feature로. parent 경로를 라벨에 붙여 맥락 제공.
+    const rows = await this.query<{ feature_id: string; label: string; description: string; parent: string | null }>(
+      `SELECT f.id AS feature_id, f.pref_label AS label, COALESCE(f.description,'') AS description, p.pref_label AS parent
+       FROM feature_registry f LEFT JOIN feature_registry p ON f.parent_id = p.id
+       WHERE f.status='grounded' AND f.repo=$1 AND f.parent_id IS NOT NULL ORDER BY f.pref_label LIMIT $2`,
       [targetRepo, limit],
     );
-    if (leaves.length) return leaves;
-    // 컴포넌트 feature가 없으면 모듈 단위로 degrade
-    return this.query<{ feature_id: string; label: string; description: string }>(
-      `SELECT id AS feature_id, pref_label AS label, COALESCE(description,'') AS description
-       FROM feature_registry WHERE status='grounded' AND repo=$1 ORDER BY pref_label LIMIT $2`,
-      [targetRepo, limit],
-    );
+    return rows.map((r) => ({ feature_id: r.feature_id, label: r.parent ? `${r.parent} › ${r.label}` : r.label, description: r.description }));
   }
   // gap = review-emergent floating feature. 후속 클러스터/promote는 P2.
   async upsertEmergentFeature(label: string, normalized: string, targetRepo: string): Promise<string> {

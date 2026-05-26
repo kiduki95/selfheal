@@ -72,10 +72,11 @@ export interface PrefilterEscalationOutput {
 }
 
 // P1: feature mapper (Claude-as-judge). 임베더가 후보를 추리고, LLM이 최종 판단.
-//   grounded  = 기존 기능에 매핑
-//   defective = 기존 기능인데 "고장/안 됨"을 보고 (여전히 매핑되지만 상태 구분)
-//   gap       = 후보 중 진짜 매칭 없음 = 미구현/요청 기능 (floating)
-export type FeatureState = 'grounded' | 'defective' | 'gap';
+//   grounded    = 기존 기능에 매핑 (일반 언급/칭찬/질문)
+//   defective   = 기존 기능인데 "고장/안 됨"을 보고
+//   enhancement = 기존 기능이 있으나 사용자가 개선/확장을 원함 (그 기능에 매핑 + 개선요청 플래그)
+//   gap         = 관련 기존 기능이 전혀 없음 = 미구현 (floating)
+export type FeatureState = 'grounded' | 'defective' | 'enhancement' | 'gap';
 export interface FeatureCandidate {
   feature_id: string;
   label: string;
@@ -106,6 +107,21 @@ export interface DescribeFeatureOutput {
   description: string;
 }
 
+// ① sub-feature 열거 — 한 컴포넌트 안의 여러 사용자 기능을 분해 (스캔당 1회).
+export interface EnumerateSubFeaturesInput {
+  component: string; // 컴포넌트 사용자어 라벨 (예: "매수/매도 주문")
+  module: string;
+  uiSurface: string; // 결정론 추출된 UI 요소 목록
+}
+export interface SubFeature {
+  label: string; // 한국어 sub-feature명 (예: "골든크로스 매수 조건")
+  description: string;
+  anchors: string[]; // 관련 UI 요소 id/라벨 (예: ["golden-cross-condition"])
+}
+export interface EnumerateSubFeaturesOutput {
+  subFeatures: SubFeature[]; // 단순 컴포넌트면 빈 배열
+}
+
 export interface LlmClient {
   readonly kind: 'stub' | 'anthropic';
   translate(input: TranslateInput): Promise<TranslateOutput>;
@@ -113,6 +129,7 @@ export interface LlmClient {
   prefilterEscalation(text: string): Promise<PrefilterEscalationOutput>;
   mapFeature(input: MapFeatureInput): Promise<MapFeatureOutput>;
   describeFeature(input: DescribeFeatureInput): Promise<DescribeFeatureOutput>;
+  enumerateSubFeatures(input: EnumerateSubFeaturesInput): Promise<EnumerateSubFeaturesOutput>;
 }
 
 // 미사용 import 경고 회피용 re-export

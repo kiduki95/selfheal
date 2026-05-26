@@ -10,6 +10,8 @@ import type {
   MapFeatureOutput,
   DescribeFeatureInput,
   DescribeFeatureOutput,
+  EnumerateSubFeaturesInput,
+  EnumerateSubFeaturesOutput,
 } from './types.js';
 import { thresholds } from '../../config.js';
 
@@ -159,16 +161,16 @@ export class AnthropicLlmClient implements LlmClient {
     const { json, usage } = await this.call({
       model: MODELS.classify,
       max_tokens: 256,
-      system: [{ type: 'text', text: 'Map the review to one existing feature, or 0 if it requests a missing capability. Output ONLY JSON {"feature":int,"state":"grounded|defective|gap","confidence":number,"reason":string}.', cache_control: { type: 'ephemeral' } }],
+      system: [{ type: 'text', text: 'Map the review to one existing feature. state: defective(broken existing)|enhancement(improve existing)|grounded(mention existing)|gap(NO related feature, feature=0). 기존 기능의 개선요청은 enhancement(gap 아님). Output ONLY JSON {"feature":int,"state":string,"confidence":number,"reason":string}.', cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: `Features:\n${list}\n\nReview (category=${input.category}):\n${input.text}${input.affected_area ? `\nAffected: ${input.affected_area}` : ''}` }],
     });
     const text = (json.content ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
     const m = text.match(/\{[\s\S]*\}/);
     const o = m ? JSON.parse(m[0]) : { feature: 0, state: 'gap', confidence: 0.5, reason: 'parse fail' };
     const n = Number(o.feature ?? 0);
-    const state = o.state === 'defective' || o.state === 'gap' ? o.state : 'grounded';
-    const feature_id = state !== 'gap' && n >= 1 && n <= input.candidates.length ? input.candidates[n - 1]!.feature_id : null;
-    return { state: feature_id ? state : 'gap', feature_id, confidence: o.confidence ?? 0.7, reason: o.reason ?? '', usage };
+    const st = ['grounded', 'defective', 'enhancement', 'gap'].includes(o.state) ? o.state : 'grounded';
+    const feature_id = st !== 'gap' && n >= 1 && n <= input.candidates.length ? input.candidates[n - 1]!.feature_id : null;
+    return { state: feature_id ? st : 'gap', feature_id, confidence: o.confidence ?? 0.7, reason: o.reason ?? '', usage };
   }
 
   async describeFeature(input: DescribeFeatureInput): Promise<DescribeFeatureOutput> {
@@ -182,6 +184,24 @@ export class AnthropicLlmClient implements LlmClient {
     const m = text.match(/\{[\s\S]*\}/);
     const o = m ? JSON.parse(m[0]) : { label: input.symbol, description: input.module };
     return { label: o.label || input.symbol, description: o.description || '' };
+  }
+
+  async enumerateSubFeatures(input: EnumerateSubFeaturesInput): Promise<EnumerateSubFeaturesOutput> {
+    const { json } = await this.call({
+      model: MODELS.classify,
+      max_tokens: 600,
+      system: [{ type: 'text', text: 'Decompose a UI component into distinct user-facing sub-features (Korean). Empty array if it is a single feature. ONLY JSON {"subFeatures":[{"label","description","anchors":[]}]}.', cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: `Component: ${input.component} (${input.module})\nUI elements: ${input.uiSurface}` }],
+    });
+    const text = (json.content ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
+    const m = text.match(/\{[\s\S]*\}/);
+    try {
+      const o = m ? JSON.parse(m[0]) : { subFeatures: [] };
+      const subs = Array.isArray(o.subFeatures) ? o.subFeatures : [];
+      return { subFeatures: subs.filter((s: any) => s && s.label).slice(0, 12).map((s: any) => ({ label: String(s.label), description: String(s.description ?? ''), anchors: Array.isArray(s.anchors) ? s.anchors.map(String) : [] })) };
+    } catch {
+      return { subFeatures: [] };
+    }
   }
 
   async prefilterEscalation(text: string): Promise<PrefilterEscalationOutput> {

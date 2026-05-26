@@ -100,7 +100,7 @@ async function printMetrics(m: InMemoryMetrics, db: Db) {
 
 async function printFeatureMapping(outcomes: ProcessOutcome[], db: Db) {
   console.log(`\n--- P1: review → feature 매핑 (Claude-as-judge, target=${config.targetRepo}) ---`);
-  const states: Record<string, number> = { grounded: 0, defective: 0, gap: 0 };
+  const states: Record<string, number> = { grounded: 0, defective: 0, enhancement: 0, gap: 0 };
   const grounded: string[] = [];
   for (const o of outcomes) {
     const fm = o.processed_review?.inferences.extraction.feature_mapping;
@@ -111,7 +111,7 @@ async function printFeatureMapping(outcomes: ProcessOutcome[], db: Db) {
       grounded.push(`${o.source_id}→${f[0]?.pref_label}(${fm.state})`);
     }
   }
-  console.log(`  states: grounded=${states.grounded} defective=${states.defective} gap=${states.gap}`);
+  console.log(`  states: grounded=${states.grounded} defective=${states.defective} enhancement=${states.enhancement} gap=${states.gap}`);
   console.log(`  매핑 예시: ${grounded.slice(0, 8).join(', ')}`);
   // floating gaps — Insight가 "어느 모듈에 추가할지" 제안할 대상
   const gaps = await db.query<{ pref_label: string }>(`SELECT pref_label FROM feature_registry WHERE status='gap' AND repo=$1 ORDER BY pref_label`, [config.targetRepo]);

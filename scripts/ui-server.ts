@@ -10,61 +10,59 @@ const db = new Db();
 const REPO = config.targetRepo;
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 
-// --- React Flow 그래프 데이터 (Module → Feature 트리 + floating gaps) ---
+// --- React Flow 그래프 (module → component → sub-feature 트리 + floating gaps) ---
 async function buildGraph() {
-  const feats = await db.query<{ id: string; feature: string; module: string; reviews: string; defective: string }>(
-    `SELECT child.id, child.pref_label AS feature, parent.pref_label AS module,
-       (SELECT count(*) FROM processed_reviews pr WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') = child.id::text) AS reviews,
-       (SELECT count(*) FROM processed_reviews pr WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') = child.id::text
+  const rows = await db.query<{ id: string; label: string; parent_id: string | null; reviews: string; defective: string }>(
+    `SELECT f.id, f.pref_label AS label, f.parent_id,
+       (SELECT count(*) FROM processed_reviews pr WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') = f.id::text) AS reviews,
+       (SELECT count(*) FROM processed_reviews pr WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') = f.id::text
           AND pr.inferences->'extraction'->'feature_mapping'->>'state' = 'defective') AS defective
-     FROM feature_registry child JOIN feature_registry parent ON child.parent_id = parent.id
-     WHERE child.repo = $1 AND child.parent_id IS NOT NULL ORDER BY module, feature`,
+     FROM feature_registry f WHERE f.repo=$1 AND f.status='grounded' ORDER BY f.pref_label`,
     [REPO],
   );
   const gaps = await db.query<{ pref_label: string }>(`SELECT pref_label FROM feature_registry WHERE status='gap' AND repo=$1 ORDER BY pref_label`, [REPO]);
 
-  const byModule = new Map<string, typeof feats>();
-  for (const f of feats) (byModule.get(f.module) ?? byModule.set(f.module, []).get(f.module)!).push(f);
-
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const children = new Map<string, string[]>();
+  const roots: string[] = [];
+  for (const r of rows) {
+    if (r.parent_id && byId.has(r.parent_id)) (children.get(r.parent_id) ?? children.set(r.parent_id, []).get(r.parent_id)!).push(r.id);
+    else roots.push(r.id);
+  }
+  const COL = 330, ROW = 58;
   const nodes: any[] = [];
   const edges: any[] = [];
-  const GAP_Y = 72;
-  let row = 0;
-  for (const [mod, fs] of byModule) {
-    const start = row;
-    for (const f of fs) {
-      const rv = Number(f.reviews);
-      const df = Number(f.defective);
-      const bg = df > 0 ? '#3a1d22' : rv > 0 ? '#1e2a23' : '#1d2230';
-      const border = df > 0 ? '#ef4444' : rv > 0 ? '#3f6f55' : '#39414f';
-      nodes.push({
-        id: 'f:' + f.id,
-        position: { x: 360, y: row * GAP_Y },
-        data: { label: `${f.feature}${rv ? `  ·  리뷰 ${rv}${df ? ` 🔴${df}` : ''}` : ''}` },
-        style: { background: bg, color: '#e6e6e6', border: `1px solid ${border}`, borderRadius: 8, fontSize: 12, width: 230, padding: 8 },
-        sourcePosition: 'left', targetPosition: 'left',
-      });
-      edges.push({ id: `e:${mod}:${f.id}`, source: 'm:' + mod, target: 'f:' + f.id, style: { stroke: '#39414f' } });
-      row++;
-    }
-    const mid = ((start + Math.max(start, row - 1)) / 2) * GAP_Y;
+  let y = 0;
+  const place = (id: string, depth: number): number => {
+    const kids = children.get(id) ?? [];
+    let myY: number;
+    if (kids.length === 0) { myY = y * ROW; y++; }
+    else { const ys = kids.map((k) => place(k, depth + 1)); myY = (ys[0]! + ys[ys.length - 1]!) / 2; }
+    const r = byId.get(id)!;
+    const rv = Number(r.reviews), df = Number(r.defective);
+    const isLeaf = kids.length === 0;
+    const style = depth === 0
+      ? { background: '#0b3a52', color: '#7dd3fc', border: '1px solid #155e75', fontFamily: 'monospace', width: 190 }
+      : { background: df > 0 ? '#3a1d22' : rv > 0 ? '#1e2a23' : isLeaf ? '#1d2230' : '#161a24', color: '#e6e6e6', border: `1px solid ${df > 0 ? '#ef4444' : rv > 0 ? '#3f6f55' : '#39414f'}`, width: depth === 1 ? 220 : 210 };
     nodes.push({
-      id: 'm:' + mod,
-      position: { x: 0, y: mid },
-      data: { label: mod },
-      style: { background: '#0b3a52', color: '#7dd3fc', border: '1px solid #155e75', borderRadius: 8, fontFamily: 'monospace', fontSize: 12, width: 200, padding: 8 },
-      sourcePosition: 'right',
+      id: 'f:' + id,
+      position: { x: depth * COL, y: myY },
+      data: { label: `${r.label}${rv ? `  ·  리뷰 ${rv}${df ? ` 🔴${df}` : ''}` : ''}` },
+      style: { ...style, borderRadius: 8, fontSize: 12, padding: 8 },
     });
-  }
-  // floating gaps — 연결된 모듈 없이 따로 떠 있게 (네 비전: Insight가 배치 제안)
-  gaps.forEach((g, i) => {
-    nodes.push({
-      id: 'g:' + i,
-      position: { x: 720, y: i * GAP_Y + 20 },
-      data: { label: `🟡 ${g.pref_label}` },
-      style: { background: '#2a230c', color: '#fde68a', border: '1px dashed #a16207', borderRadius: 8, fontSize: 12, width: 220, padding: 8 },
-    });
-  });
+    for (const k of kids) edges.push({ id: `e:${id}:${k}`, source: 'f:' + id, target: 'f:' + k, style: { stroke: '#39414f' } });
+    return myY;
+  };
+  for (const root of roots) place(root, 0);
+
+  // floating gaps — 연결된 모듈 없이 따로 떠 있게 (Insight가 배치 제안)
+  const gapX = 3 * COL + 60;
+  gaps.forEach((g, i) => nodes.push({
+    id: 'g:' + i,
+    position: { x: gapX, y: i * ROW + 20 },
+    data: { label: `🟡 ${g.pref_label}` },
+    style: { background: '#2a230c', color: '#fde68a', border: '1px dashed #a16207', borderRadius: 8, fontSize: 12, width: 200, padding: 8 },
+  }));
   return { nodes, edges };
 }
 
@@ -82,7 +80,7 @@ async function sectionsHtml() {
        (SELECT fr.pref_label FROM processed_reviews pr JOIN feature_registry fr ON fr.id=(pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid WHERE pr.signal_group_id=g.id LIMIT 1) AS feature
      FROM signal_groups g ORDER BY g.corroboration_count DESC, g.created_at`,
   );
-  const badge = (s: string) => (s === 'defective' ? `<span class="b def">defective</span>` : s === 'gap' ? `<span class="b gap">gap</span>` : s === 'grounded' ? `<span class="b grd">grounded</span>` : '');
+  const badge = (s: string) => (s === 'defective' ? `<span class="b def">defective</span>` : s === 'gap' ? `<span class="b gap">gap</span>` : s === 'enhancement' ? `<span class="b enh">enhancement</span>` : s === 'grounded' ? `<span class="b grd">grounded</span>` : '');
   const rows = reviews.map((r) => `<tr><td class="mono">${esc(r.source_id)}</td><td>${esc(r.category)}${r.severity ? ` <span class="sev ${esc(r.severity)}">${esc(r.severity)}</span>` : ''}</td><td>${badge(r.fstate)} ${r.feature ? esc(r.feature) : r.fstate === 'gap' ? '<i>미구현</i>' : '—'}</td><td class="txt">${esc((r.text ?? '').slice(0, 64))}</td></tr>`).join('');
   const grps = groups.map((g) => `<div class="grp ${g.corroboration_count > 1 ? 'corro' : ''}">${g.corroboration_count > 1 ? '⭐ ' : ''}<b>${esc(g.feature ?? '?')}</b> <span class="b">${esc(g.error_signature ?? '?')}</span> · 증거 ${g.corroboration_count} · ${esc((g.affected_platforms ?? []).join(', '))} · ${esc(g.trend)}</div>`).join('');
   return `<h2>② 리뷰 → 기능 매핑 (${reviews.length})</h2><table>${rows}</table>
@@ -101,7 +99,7 @@ const PAGE = (sections: string) => `<!doctype html><html lang="ko"><head><meta c
   table{width:100%;border-collapse:collapse}td{padding:6px 8px;border-bottom:1px solid #1e2330;vertical-align:top}
   .mono{font-family:monospace;color:#9aa;font-size:12px}.txt{color:#aab;font-size:12px}
   .b{font-size:11px;padding:1px 6px;border-radius:4px;background:#2a3142;color:#9fb}
-  .b.def{background:#7f1d1d;color:#fecaca}.b.gap{background:#78550c;color:#fde68a}.b.grd{background:#14532d;color:#bbf7d0}
+  .b.def{background:#7f1d1d;color:#fecaca}.b.gap{background:#78550c;color:#fde68a}.b.grd{background:#14532d;color:#bbf7d0}.b.enh{background:#1e3a5f;color:#bfdbfe}
   .sev{font-size:10px;padding:0 5px;border-radius:3px;background:#333}.sev.critical{background:#7f1d1d;color:#fecaca}.sev.high{background:#7c2d12;color:#fed7aa}
   .grp{background:#161a24;border:1px solid #262b38;border-radius:8px;padding:8px 10px;margin:6px 0;font-size:13px}.grp.corro{border-color:#a16207}
 </style></head><body><div class="wrap">

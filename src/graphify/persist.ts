@@ -64,6 +64,7 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
     // 3) feature(코드 파생) upsert (+② enrich) + 멤버에 feature_id 누적 + parent_id 트리
     const idBySlug = new Map<string, string>();
     let enriched = 0;
+    let subCount = 0;
     for (const f of scan.features) {
       let label = f.pref_label;
       let desc = f.description;
@@ -96,6 +97,26 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
           [fid, memberIds],
         );
       }
+
+      // ① sub-feature 분해 — UI 요소가 풍부한 컴포넌트만 (스캔당 1회 LLM). parent=이 컴포넌트, 앵커=같은 파일.
+      if (llm && f.level === 'component' && f.uiSurface && f.uiSurface.split(' | ').length >= 4) {
+        const sub = await llm.enumerateSubFeatures({ component: label, module: f.parentSlug?.replace('code.', '') ?? '', uiSurface: f.uiSurface });
+        const fileId = f.fileKey ? idByKey.get(f.fileKey) : undefined;
+        for (const s of sub.subFeatures) {
+          const sslug = `${scan.repo}#${f.slug}.${s.label.toLowerCase().replace(/\s+/g, '-')}`.slice(0, 200);
+          const desc = s.description + (s.anchors.length ? ` [anchors: ${s.anchors.join(', ')}]` : '');
+          const { vector: sv } = await embedder.embed(`${s.label} ${s.description} ${s.anchors.join(' ')}`);
+          const srows = await db.query<{ id: string }>(
+            `INSERT INTO feature_registry (canonical_slug, pref_label, description, embedding, origin, status, repo, parent_id)
+             VALUES ($1,$2,$3,$4::vector,'code_derived','grounded',$5,$6)
+             ON CONFLICT (canonical_slug) DO UPDATE SET pref_label=EXCLUDED.pref_label, description=EXCLUDED.description, embedding=EXCLUDED.embedding, parent_id=EXCLUDED.parent_id
+             RETURNING id`,
+            [sslug, s.label, desc, toSqlVector(sv), scan.repo, fid],
+          );
+          if (fileId) await db.query(`UPDATE code_artifact_registry SET feature_ids = ARRAY(SELECT DISTINCT unnest(feature_ids || ARRAY[$1]::uuid[])) WHERE id = $2`, [srows[0]!.id, fileId]);
+          subCount++;
+        }
+      }
     }
     // parent_id (SKOS broader): 컴포넌트 feature → 모듈 feature
     for (const f of scan.features) {
@@ -105,6 +126,7 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
       if (childId && parentId) await db.query(`UPDATE feature_registry SET parent_id = $2 WHERE id = $1`, [childId, parentId]);
     }
     if (enriched) console.log(`  ② enriched ${enriched} component features (user-facing labels)`);
+    if (subCount) console.log(`  ① decomposed into ${subCount} sub-features`);
 
     await db.query(
       `UPDATE graphify_runs SET status='done', nodes_total=$2, edges_total=$3, features_total=$4, finished_at=now() WHERE id=$1`,
