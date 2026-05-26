@@ -250,7 +250,7 @@ export class Db {
       `SELECT id FROM signal_groups
        WHERE status = 'open' AND error_signature = $1
          AND (code_artifact_ids = '{}' OR $2::uuid[] = '{}' OR code_artifact_ids && $2::uuid[])
-       ORDER BY corroboration_count DESC LIMIT 1`,
+       ORDER BY corroboration_count DESC, first_seen ASC, id ASC LIMIT 1`,
       [canonical, artifactIds],
     );
     return rows[0] ?? null;
@@ -263,7 +263,7 @@ export class Db {
        FROM signal_groups
        WHERE status = 'open' AND representative_embedding IS NOT NULL
          AND ($2::uuid[] = '{}' OR code_artifact_ids = '{}' OR code_artifact_ids && $2::uuid[])
-       ORDER BY representative_embedding <=> $1::vector ASC LIMIT 3`,
+       ORDER BY representative_embedding <=> $1::vector ASC, id ASC LIMIT 3`,
       [toSqlVector(vector), artifactIds],
     );
   }
@@ -332,6 +332,26 @@ export class Db {
       const times = (g.times ?? []).filter((s): s is string => !!s).map((s) => Date.parse(s)).filter((n) => Number.isFinite(n));
       await this.query(`UPDATE signal_groups SET trend = $2 WHERE id = $1`, [g.id, deriveTrend(times, now.getTime())]);
     }
+  }
+  // --- reconciliation merge (#3) ---
+  async openSignalGroups(): Promise<{ id: string; error_signature: string | null; code_artifact_ids: string[]; first_seen: string }[]> {
+    return this.query(`SELECT id, error_signature, code_artifact_ids, first_seen::text AS first_seen FROM signal_groups WHERE status = 'open'`);
+  }
+  // Merge dropIds into keepId: reassign members, recompute aggregates from members, close dropped (provenance kept).
+  async mergeSignalGroups(keepId: string, dropIds: string[], unionArtifacts: string[]): Promise<void> {
+    if (!dropIds.length) return;
+    await this.query(`UPDATE processed_reviews SET signal_group_id = $1 WHERE signal_group_id = ANY($2::uuid[])`, [keepId, dropIds]);
+    await this.query(
+      `UPDATE signal_groups SET
+         code_artifact_ids = $2::uuid[],
+         corroboration_count = (SELECT count(*) FROM processed_reviews WHERE signal_group_id = $1),
+         affected_versions = COALESCE((SELECT array_agg(DISTINCT facts->>'app_version') FROM processed_reviews WHERE signal_group_id = $1 AND facts->>'app_version' IS NOT NULL), '{}'),
+         affected_platforms = COALESCE((SELECT array_agg(DISTINCT facts->>'platform') FROM processed_reviews WHERE signal_group_id = $1 AND facts->>'platform' IS NOT NULL), '{}')
+       WHERE id = $1`,
+      [keepId, unionArtifacts],
+    );
+    await this.query(`UPDATE signal_groups SET status = 'merged' WHERE id = ANY($1::uuid[])`, [dropIds]);
+    await this.writeSignalEvent(keepId, 'MERGED', { dropped: dropIds }, 'reconciliation');
   }
   async recordResolution(groupId: string, prId: string, appVersion: string | null): Promise<void> {
     await this.query(`INSERT INTO resolution_signals (signal_group_id, processed_review_id, app_version) VALUES ($1,$2,$3)`, [groupId, prId, appVersion]);
