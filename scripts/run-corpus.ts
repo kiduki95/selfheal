@@ -23,7 +23,7 @@ async function main() {
   await db.query(`DELETE FROM feature_registry WHERE status='gap'`); // review-emergent gap — 이번 런 기준 재생성
   await db.query('DELETE FROM raw_reviews');
 
-  console.log(`\n=== Ouroboros Processing Layer — Phase 1 ===`);
+  console.log(`\n=== selfheal Processing Layer — Phase 1 ===`);
   console.log(`LLM=${config.llmClient}  embedding=${config.embeddingClient}  reviews=${CORPUS.length}\n`);
 
   const outcomes: ProcessOutcome[] = [];

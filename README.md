@@ -1,4 +1,4 @@
-# Ouroboros
+# selfheal
 Ingests user reviews, clusters them into themes, and opens PRs for the highest-impact ones.
 
 설계 스펙: [`docs/processing-layer.md`](docs/processing-layer.md) (v0.5, 설계 동결) · [선행 사례](docs/processing-layer-prior-art.md)
