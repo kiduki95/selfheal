@@ -189,10 +189,13 @@ export async function processReview(raw: unknown, ctx: PipelineCtx): Promise<Pro
       is_actionable: isActionable,
     };
 
-    // gap → Insight 큐(어느 모듈에 추가할지), enhancement → 개선 요청 큐
-    if (featureMapping?.state === 'gap') humanReasons.push('feature_gap');
-    else if (featureMapping?.state === 'enhancement') humanReasons.push('feature_enhancement');
   }
+
+  // gap → Insight 큐, enhancement → 개선 요청 큐. inferences 기준이라 cache HIT 리뷰도 큐잉됨 (#5 fix —
+  // 이전엔 miss 분기에만 있어 캐시 히트 시 gap/enhancement가 사람 큐에서 누락됐다).
+  const fmState = inferences.extraction.feature_mapping?.state;
+  if (fmState === 'gap') humanReasons.push('feature_gap');
+  else if (fmState === 'enhancement') humanReasons.push('feature_enhancement');
 
   // --- 분포/품질 metric (classified·cache_hit 양쪽 공통, inferences 기준) ---
   m.inc('funnel.classified');
