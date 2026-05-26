@@ -132,7 +132,8 @@ export interface ProposeGapInput {
 export interface ProposeGapOutput {
   placement: 'existing_module' | 'new_module';
   module: string; // 기존 모듈명 또는 제안 신규 모듈명
-  connection: string; // 어떤 기존 모듈과 어떻게 연결되는지
+  connection: string; // 어떤 기존 모듈과 어떻게 연결되는지 (사람용 설명)
+  connections?: string[]; // ⑦ structured: existing module names referenced → exact grounding check (no regex)
   title: string;
   body: string; // GitHub issue 본문(markdown)
 }

@@ -213,7 +213,7 @@ export class AnthropicLlmClient implements LlmClient {
     const { json } = await this.call({
       model: MODELS.classify,
       max_tokens: 1024,
-      system: [{ type: 'text', text: 'Propose where to add a requested missing feature in the codebase. ONLY JSON {"placement":"existing_module"|"new_module","module":string,"connection":string,"title":string,"body":string}.', cache_control: { type: 'ephemeral' } }],
+      system: [{ type: 'text', text: 'Propose where to add a requested missing feature in the codebase. "connections" must list only module names present in the given map. ONLY JSON {"placement":"existing_module"|"new_module","module":string,"connection":string,"connections":[string],"title":string,"body":string}.', cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: `Missing feature: ${input.gap} — ${input.gapDescription}\n\nModule map:\n${map}` }],
     });
     const text = (json.content ?? []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
@@ -222,6 +222,7 @@ export class AnthropicLlmClient implements LlmClient {
     return {
       placement: o.placement === 'new_module' ? 'new_module' : 'existing_module',
       module: String(o.module ?? '?'), connection: String(o.connection ?? ''),
+      connections: Array.isArray(o.connections) ? o.connections.map(String) : [],
       title: String(o.title ?? `[feature] ${input.gap}`), body: String(o.body ?? input.gapDescription),
     };
   }

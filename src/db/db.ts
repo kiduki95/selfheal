@@ -452,6 +452,7 @@ export class Db {
         (SELECT max(CASE pr.inferences->'classification'->>'severity' WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END)
            FROM processed_reviews pr WHERE pr.signal_group_id = g.id) AS sev,
         (SELECT fr.pref_label FROM processed_reviews pr JOIN feature_registry fr ON fr.id=(pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid WHERE pr.signal_group_id = g.id LIMIT 1) AS feature,
+        (SELECT (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') FROM processed_reviews pr WHERE pr.signal_group_id = g.id AND (pr.inferences->'extraction'->'feature_mapping'->>'feature_id') IS NOT NULL LIMIT 1) AS feature_id,
         ca.path AS module_path, ca.module AS code_module, ca.risk_tier,
         (SELECT array_agg(t) FROM (SELECT pr.facts->>'text_redacted' AS t FROM processed_reviews pr WHERE pr.signal_group_id = g.id LIMIT 3) s) AS samples
        FROM signal_groups g
@@ -492,7 +493,9 @@ export class Db {
   async gapFeatures2(repo: string): Promise<any[]> {
     return this.query(
       `SELECT f.id, f.pref_label,
-        (SELECT count(*) FROM processed_reviews pr WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid IN
+        (SELECT count(DISTINCT COALESCE(rr.payload->'author'->>'id', rr.payload->'author'->>'name', pr.source_id))
+           FROM processed_reviews pr JOIN raw_reviews rr ON rr.id = pr.raw_review_id
+           WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid IN
            (SELECT f.id UNION SELECT mm.id FROM feature_registry mm WHERE mm.merged_into = f.id)) AS demand,
         (SELECT array_agg(t) FROM (SELECT pr.facts->>'text_redacted' AS t FROM processed_reviews pr
            WHERE (pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid IN
@@ -503,8 +506,12 @@ export class Db {
   }
   async enhancementItems(repo: string): Promise<any[]> {
     return this.query(
-      `SELECT fr.id, fr.pref_label, count(*)::int AS demand, array_agg(pr.facts->>'text_redacted') AS samples
-       FROM processed_reviews pr JOIN feature_registry fr ON fr.id = (pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid
+      `SELECT fr.id, fr.pref_label,
+              count(DISTINCT COALESCE(rr.payload->'author'->>'id', rr.payload->'author'->>'name', pr.source_id))::int AS demand,
+              array_agg(pr.facts->>'text_redacted') AS samples
+       FROM processed_reviews pr
+       JOIN raw_reviews rr ON rr.id = pr.raw_review_id
+       JOIN feature_registry fr ON fr.id = (pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid
        WHERE pr.inferences->'extraction'->'feature_mapping'->>'state' = 'enhancement' AND fr.repo = $1
        GROUP BY fr.id, fr.pref_label ORDER BY demand DESC`,
       [repo],
@@ -533,6 +540,23 @@ export class Db {
              title_snap = EXCLUDED.title_snap, decided_at = now()`,
       [p.repo, p.kind, p.ref_id, p.decision, p.note ?? null, p.by ?? null, p.title ?? null],
     );
+  }
+  // ⑧ Calibration signal: approval/rejection rate per impact band. If high bands aren't approved more
+  // than low bands, the impact weights are miscalibrated. (Measurement only — auto-tuning needs more data.)
+  // Snapshot semantics: counts start from the CURRENT proposals; decisions on proposals no longer
+  // regenerated (their signal disappeared) aren't counted here. Fine for a live snapshot.
+  async decisionsByBand(repo: string): Promise<{ band: string; total: number; approved: number; rejected: number }[]> {
+    const rows = await this.query<{ band: string | null; total: string; approved: string; rejected: string }>(
+      `SELECT p.evidence->>'band' AS band,
+              count(*) AS total,
+              count(*) FILTER (WHERE pr.decision = 'approved') AS approved,
+              count(*) FILTER (WHERE pr.decision = 'rejected') AS rejected
+       FROM proposals p
+       LEFT JOIN proposal_reviews pr ON pr.repo = p.repo AND pr.kind = p.kind AND pr.ref_id = p.ref_id
+       WHERE p.repo = $1 GROUP BY p.evidence->>'band' ORDER BY 1`,
+      [repo],
+    );
+    return rows.map((r) => ({ band: r.band ?? 'unknown', total: Number(r.total), approved: Number(r.approved), rejected: Number(r.rejected) }));
   }
   // Approved proposals (current generation) — Auto-Dev's input queue.
   async approvedProposals(repo: string): Promise<any[]> {

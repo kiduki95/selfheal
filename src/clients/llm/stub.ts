@@ -262,10 +262,13 @@ export class StubLlmClient implements LlmClient {
     }
     const existing = best && best.score >= 1;
     const module = existing ? best!.module : `${input.gap.replace(/\s+/g, '')}Module(신규)`;
+    // ⑦ structured connections: real modules this proposal references (the matched module).
+    const connections = existing && best ? [best.module] : [];
     return {
       placement: existing ? 'existing_module' : 'new_module',
       module,
       connection: existing ? `${module}에 기능 추가` : '신규 모듈 — 관련 모듈과 연결 검토 필요',
+      connections,
       title: `[feature] ${input.gap} 지원`,
       body: `## 요청 기능\n${input.gap} — ${input.gapDescription}\n\n## 제안 배치\n- ${existing ? `기존 모듈 \`${module}\`에 추가` : `신규 모듈 \`${module}\` 필요`}\n`,
     };
