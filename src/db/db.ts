@@ -373,13 +373,27 @@ export class Db {
         (SELECT max(CASE pr.inferences->'classification'->>'severity' WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END)
            FROM processed_reviews pr WHERE pr.signal_group_id = g.id) AS sev,
         (SELECT fr.pref_label FROM processed_reviews pr JOIN feature_registry fr ON fr.id=(pr.inferences->'extraction'->'feature_mapping'->>'feature_id')::uuid WHERE pr.signal_group_id = g.id LIMIT 1) AS feature,
-        ca.path AS module_path, ca.risk_tier,
+        ca.path AS module_path, ca.module AS code_module, ca.risk_tier,
         (SELECT array_agg(t) FROM (SELECT pr.facts->>'text_redacted' AS t FROM processed_reviews pr WHERE pr.signal_group_id = g.id LIMIT 3) s) AS samples
        FROM signal_groups g
-       LEFT JOIN LATERAL (SELECT path, risk_tier FROM code_artifact_registry WHERE id = ANY(g.code_artifact_ids) ORDER BY risk_score DESC LIMIT 1) ca ON true
+       LEFT JOIN LATERAL (SELECT path, module, risk_tier FROM code_artifact_registry WHERE id = ANY(g.code_artifact_ids) ORDER BY risk_score DESC LIMIT 1) ca ON true
        WHERE g.status = 'open'
        ORDER BY g.corroboration_count DESC`,
     );
+  }
+  // Module-level blast-radius: per target module, # distinct external files that call/import into it.
+  // (calls + imports so it has data even before a calls-aware re-scan.) Feeds Insight bug priority.
+  async moduleBlastRadius(repo: string): Promise<Record<string, number>> {
+    const rows = await this.query<{ module: string; callers: string }>(
+      `SELECT tgt.module AS module, count(DISTINCT src.path) AS callers
+       FROM code_edges e
+       JOIN code_artifact_registry tgt ON tgt.id = e.dst_id
+       JOIN code_artifact_registry src ON src.id = e.src_id
+       WHERE e.repo = $1 AND e.kind IN ('calls','imports') AND src.module <> tgt.module
+       GROUP BY tgt.module`,
+      [repo],
+    );
+    return Object.fromEntries(rows.map((r) => [r.module, Number(r.callers)]));
   }
   // 클러스터링 입력 — 아직 안 묶인 gap 전부 (id/label/대표 샘플)
   async gapFeaturesRaw(repo: string): Promise<{ id: string; label: string; sample: string }[]> {

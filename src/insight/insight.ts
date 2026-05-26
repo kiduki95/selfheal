@@ -10,6 +10,9 @@ import type { LlmClient } from '../clients/llm/types.js';
 const SEV_W: Record<number, number> = { 4: 3, 3: 2, 2: 1.3, 1: 1 };
 const RISK_W: Record<string, number> = { critical: 3, high: 2, medium: 1.5, low: 1 };
 const TREND_W: Record<string, number> = { rising: 1.5, new: 1, stable: 1, declining: 0.5 };
+// Blast-radius weight (CodeFlow impact): a bug in highly-depended-on code affects more of the system.
+// Gentle multiplier so corroboration/severity still dominate. callers = distinct external dependents.
+const impactW = (callers: number): number => (callers >= 6 ? 1.4 : callers >= 3 ? 1.25 : callers >= 1 ? 1.1 : 1);
 
 export interface ProposalView {
   kind: 'bug_fix' | 'feature_gap' | 'enhancement';
@@ -50,15 +53,17 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
   const impMap = new Map((await db.moduleImports(repo)).map((i) => [i.module, i.imports]));
   const moduleMap = (await db.moduleMap(repo)).map((m) => ({ ...m, imports: impMap.get(m.module) ?? [] }));
   const realModules = new Set(await db.moduleNames(repo));
+  const blastRadius = await db.moduleBlastRadius(repo); // CodeFlow impact → bug priority weight
 
   // 1) 버그픽스 제안 (defective 신호그룹)
   for (const g of await db.bugGroups(repo)) {
     const sev = Number(g.sev ?? 1);
-    const priority = round2(Number(g.corroboration_count) * (SEV_W[sev] ?? 1) * (RISK_W[g.risk_tier] ?? 1) * (TREND_W[g.trend] ?? 1));
+    const callers = blastRadius[g.code_module] ?? 0; // CodeFlow blast-radius of the buggy module
+    const priority = round2(Number(g.corroboration_count) * (SEV_W[sev] ?? 1) * (RISK_W[g.risk_tier] ?? 1) * (TREND_W[g.trend] ?? 1) * impactW(callers));
     const samples = (g.samples ?? []).filter(Boolean) as string[];
     const title = `[bug] ${g.feature ?? '?'} — ${g.error_signature ?? '오류'} (증거 ${g.corroboration_count}건)`;
-    const body = `## 버그 신호\n- 기능: **${g.feature ?? '?'}** · 코드: \`${g.module_path ?? '미매핑'}\` [risk=${g.risk_tier ?? '?'}]\n- 에러 패밀리: \`${g.error_signature ?? '?'}\`\n- 증거: ${g.corroboration_count}건 · 플랫폼 ${(g.affected_platforms ?? []).join(', ')} · 버전 ${(g.affected_versions ?? []).join(', ')} · 추세 ${g.trend}\n\n## 샘플 리뷰\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}\n\n→ Auto-Dev가 \`${g.module_path ?? '?'}\` 수정 PR 후보.`;
-    await db.insertProposal({ repo, kind: 'bug_fix', ref_id: g.id, title, body, priority, target_module: g.module_path ?? null, placement: null, evidence: { corroboration: g.corroboration_count, sev, risk: g.risk_tier, trend: g.trend } });
+    const body = `## 버그 신호\n- 기능: **${g.feature ?? '?'}** · 코드: \`${g.module_path ?? '미매핑'}\` [risk=${g.risk_tier ?? '?'}, blast-radius=${callers} dependents]\n- 에러 패밀리: \`${g.error_signature ?? '?'}\`\n- 증거: ${g.corroboration_count}건 · 플랫폼 ${(g.affected_platforms ?? []).join(', ')} · 버전 ${(g.affected_versions ?? []).join(', ')} · 추세 ${g.trend}\n\n## 샘플 리뷰\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}\n\n→ Auto-Dev가 \`${g.module_path ?? '?'}\` 수정 PR 후보.`;
+    await db.insertProposal({ repo, kind: 'bug_fix', ref_id: g.id, title, body, priority, target_module: g.module_path ?? null, placement: null, evidence: { corroboration: g.corroboration_count, sev, risk: g.risk_tier, trend: g.trend, blast_radius: callers } });
     out.push({ kind: 'bug_fix', title, priority, target_module: g.module_path ?? null, placement: null, body });
   }
 
