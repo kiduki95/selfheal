@@ -219,12 +219,27 @@ CREATE INDEX ON codeflow_runs (repo, started_at DESC);
 | risk/owners | **이식** | `code-risk.ts` + CODEOWNERS 이미 selfheal에 있음. |
 | 출력 저장소 | **새로 만듦** | 그 도구 자체 store 대신 selfheal Postgres+pgvector. |
 
+### 6.1 codegraph (colbymchenry/codegraph) 비교 — 흡수/비흡수 (2026-05-26)
+
+codegraph = 에이전트가 grep 대신 **사전인덱싱된 코드 그래프를 질의**하게 하는 MCP 서버(tree-sitter 20+언어, SQLite+FTS5, **임베딩 0**, calls/imports/extends/implements 엣지 + impact 분석). 목적은 우리와 다르지만(우리 = 리뷰 grounding) substrate가 겹친다.
+
+**흡수함**
+- ✅ **calls 엣지 + impact(blast-radius)** — 설계엔 이미 있었으나 미구현이던 것. import-binding으로 구현(§7). `Db.codeBlastRadius`.
+- ✅ **스캐너 견고성** — >1MB 파일 스킵, vendor/build/out/target/.venv/.turbo 제외.
+
+**비흡수 (이유)**
+- ❌ **SQLite/FTS5 스토리지** — 우리는 Postgres+pgvector(레이어 공유 테이블)에 커밋. 바꾸지 않음.
+- ❌ **20+ 언어 tree-sitter + 네이티브 바이너리** — 의도적으로 피한 네이티브 빌드를 재도입. 백엔드(Java 등) 커버리지가 진짜 우선순위가 될 때만, 필요한 언어로 한정.
+- ⏳ **프레임워크 route 추출**(Spring/NestJS/FastAPI 등 14종 → route 노드) — 우리 약점(프론트만 잡힘)을 직접 해소하나, 진짜 가치(백엔드)는 multi-lang 필요 → 위와 함께 보류. Next.js app-router 한정 추출은 저비용 후속 후보.
+- ⏳ **MCP로 그래프 노출** — codegraph의 본질. 우리 **Auto-Dev(레이어5)**가 PR 쓸 때 grep 대신 codeflow를 질의하면 비용 급감 → Auto-Dev 착수 시 codeflow를 MCP 도구(search/context/impact)로 노출하는 설계 채택.
+- 💡 **검증**: codegraph가 임베딩 0으로 tool call 85%↓ → 코드 그래프·구조 질의는 임베딩 없이도 멀리 간다는 방증. 우리 pgvector는 리뷰↔코드 *의미* 매칭에만(코드 구조 질의는 결정론 유지).
+
 ---
 
 ## 7. 결정 / 열린 질문
 
 **결정됨**
-- ✅ **call 그래프 v0.1 포함** (contains+imports+calls). 언어별 resolver, 첫 타깃 언어부터.
+- ✅ **call 그래프 구현됨** (contains+imports+**calls**). TypeChecker 없이 **import binding 해소**(src=호출 파일, dst=호출/렌더/new된 내부 export 심볼; 외부 lib 호출은 노드가 없어 자연 제외). codegraph의 calls/impact를 우리식으로. `Db.codeBlastRadius`가 fan-in(distinct 호출 파일)×risk를 질의 → Insight 우선순위·Auto-Dev "이거 건드리면 뭐 깨지나" 입력. dogfood 검증: calls 39엣지, 최상위 `envelope`(api, 4×). 심볼→심볼(호출자 scope) 정밀화는 후속.
 - ✅ **풀패스(T4a)는 무조건 실행**, Claude 토큰 0. LLM(T4b)은 매칭 약한 노드에만 핀포인트 — "안 쓰자"가 아니라 "줄이자".
 - ✅ **첫 타깃 언어 = TypeScript/JS.** selfheal 자체가 TS → **dogfooding**(우리 repo로 e2e). TS의 tree-sitter·import 해소가 성숙해 call resolver 착수도 최단.
 

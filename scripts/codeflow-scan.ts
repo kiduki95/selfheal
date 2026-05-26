@@ -44,6 +44,11 @@ async function main() {
   const ek = await db.query<{ kind: string; n: string }>(`SELECT kind, count(*)::text AS n FROM code_edges WHERE repo=$1 GROUP BY kind`, [repo]);
   console.log(`\n--- edges: ${ek.map((e) => `${e.kind}=${e.n}`).join(' ')} ---`);
 
+  // impact / blast-radius — 가장 많이 호출되는 심볼 (codegraph의 impact를 우리식으로; calls 엣지 기반)
+  const impact = await db.codeBlastRadius(repo, 12);
+  console.log(`\n--- blast radius (callers · risk) ---`);
+  for (const i of impact) console.log(`  ${String(i.callers).padStart(3)}× ${i.symbol ?? i.path}  [${i.risk_tier}] ${i.module}`);
+
   // code-derived features (grounded)
   const feats = await db.query<{ pref_label: string; status: string }>(
     `SELECT pref_label, status FROM feature_registry WHERE origin='code_derived' ORDER BY pref_label`,

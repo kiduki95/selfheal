@@ -173,6 +173,18 @@ export class Db {
       [toSqlVector(vector)],
     );
   }
+  // Impact / blast-radius (codegraph-style): how many distinct files call each symbol, joined with risk.
+  // High callers x high risk = high blast radius → feeds Insight priority / Auto-Dev "what breaks if I touch this".
+  async codeBlastRadius(repo: string, limit = 20): Promise<{ path: string; symbol: string | null; module: string; risk_tier: string; callers: number }[]> {
+    const rows = await this.query<{ path: string; symbol: string | null; module: string; risk_tier: string; callers: string }>(
+      `SELECT a.path, a.symbol, a.module, a.risk_tier, count(DISTINCT e.src_id) AS callers
+       FROM code_artifact_registry a JOIN code_edges e ON e.dst_id = a.id AND e.kind = 'calls'
+       WHERE a.repo = $1 AND a.is_active
+       GROUP BY a.id ORDER BY callers DESC, a.risk_tier DESC LIMIT $2`,
+      [repo, limit],
+    );
+    return rows.map((r) => ({ path: r.path, symbol: r.symbol, module: r.module, risk_tier: r.risk_tier, callers: Number(r.callers) }));
+  }
 
   // --- P1: feature mapping (Claude-as-judge) ---
   // 타깃 repo의 grounded feature 후보 전체 (소규모 codebase는 임베딩 추림 없이 전부 LLM에).

@@ -1,5 +1,5 @@
 import ts from 'typescript';
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, relative, dirname, sep } from 'node:path';
 
@@ -24,7 +24,7 @@ export interface ArtifactNode {
 export interface EdgeSpec {
   srcKey: string;
   dstKey: string;
-  kind: 'contains' | 'imports' | 'provides';
+  kind: 'contains' | 'imports' | 'calls' | 'provides';
 }
 export interface FeatureSpec {
   slug: string;
@@ -50,7 +50,8 @@ export interface ScanOptions {
   srcDirs?: string[]; // 미지정 시 자동감지
 }
 
-const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'coverage', '.next', 'public', 'styles', '.github']);
+const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'coverage', '.next', 'public', 'styles', '.github', 'vendor', 'build', 'out', 'target', '.venv', '.turbo']);
+const MAX_FILE_BYTES = 1_000_000; // skip generated/huge files (codegraph convention)
 const SRC_CANDIDATES = ['src', 'app', 'components', 'lib', 'hooks', 'pages', 'server'];
 
 export function scanRepo(opts: ScanOptions): ScanResult {
@@ -69,6 +70,9 @@ export function scanRepo(opts: ScanOptions): ScanResult {
   const moduleMembers = new Map<string, string[]>();
   const importPairs: { fromFile: string; toRel: string }[] = [];
   const moduleSet = new Set<string>();
+  // For calls edges: per file, which local name binds to which imported symbol+target, and which names are actually used.
+  const callBindings = new Map<string, Map<string, { importedName: string; toRel: string }>>();
+  const usedNames = new Map<string, Set<string>>();
 
   for (const abs of files) {
     const relPath = toPosix(relative(root, abs));
@@ -97,7 +101,17 @@ export function scanRepo(opts: ScanOptions): ScanResult {
     for (const stmt of sf.statements) {
       if (ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier)) {
         const spec = stmt.moduleSpecifier.text;
-        if (spec.startsWith('.') || spec.startsWith('@/')) importPairs.push({ fromFile: relPath, toRel: resolveImport(relPath, spec) });
+        if (spec.startsWith('.') || spec.startsWith('@/')) {
+          const toRel = resolveImport(relPath, spec);
+          importPairs.push({ fromFile: relPath, toRel });
+          // Capture named-import bindings: localName → { importedName (handles `as`), target }.
+          const clause = stmt.importClause;
+          if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+            const binds = callBindings.get(relPath) ?? new Map();
+            for (const el of clause.namedBindings.elements) binds.set(el.name.text, { importedName: (el.propertyName ?? el.name).text, toRel });
+            callBindings.set(relPath, binds);
+          }
+        }
         continue;
       }
       if (!isExported(stmt)) continue;
@@ -118,6 +132,7 @@ export function scanRepo(opts: ScanOptions): ScanResult {
         pushMember(moduleMembers, module, symKey);
       }
     }
+    usedNames.set(relPath, collectUsedNames(sf)); // call/JSX/new usages → calls edges below
   }
 
   // module 노드 + module→file contains
@@ -140,13 +155,29 @@ export function scanRepo(opts: ScanOptions): ScanResult {
 
   // imports 엣지 (해소되는 것만) — 확장자 없는 별칭/상대경로 모두 .ts/.tsx/index로 시도
   for (const { fromFile, toRel } of importPairs) {
-    const base = toRel.replace(/\.(ts|tsx|js)$/, '');
-    for (const cand of [toRel, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]) {
-      const dst = fileKeyByPath.get(cand);
-      if (dst && dst !== fromFile) {
-        edges.push({ srcKey: fromFile, dstKey: dst, kind: 'imports' });
-        break;
-      }
+    const dst = resolveToFileKey(toRel, fileKeyByPath);
+    if (dst && dst !== fromFile) edges.push({ srcKey: fromFile, dstKey: dst, kind: 'imports' });
+  }
+
+  // calls 엣지 — TypeChecker 없이 import binding으로 해소 (codegraph의 calls/impact를 우리식으로).
+  // src=호출하는 파일, dst=실제 호출/렌더된 내부 export 심볼. 외부(lib) 호출은 노드가 없어 자연 제외.
+  // impact(blast-radius) = 한 심볼을 호출하는 distinct 파일 수 → Insight 우선순위·Auto-Dev 입력.
+  const nodeKeySet = new Set(nodes.map((n) => n.key));
+  const callSeen = new Set<string>();
+  for (const [fromFile, used] of usedNames) {
+    const binds = callBindings.get(fromFile);
+    if (!binds) continue;
+    for (const name of used) {
+      const b = binds.get(name);
+      if (!b) continue;
+      const dstFile = resolveToFileKey(b.toRel, fileKeyByPath);
+      if (!dstFile || dstFile === fromFile) continue;
+      const dstKey = `${dstFile}#${b.importedName}`;
+      if (!nodeKeySet.has(dstKey)) continue; // only intra-repo exported symbols we tracked
+      const sig = `${fromFile}->${dstKey}`;
+      if (callSeen.has(sig)) continue;
+      callSeen.add(sig);
+      edges.push({ srcKey: fromFile, dstKey, kind: 'calls' });
     }
   }
 
@@ -199,7 +230,9 @@ function walkCode(dir: string): string[] {
     if (e.name.startsWith('.') || SKIP_DIRS.has(e.name)) continue;
     const p = join(dir, e.name);
     if (e.isDirectory()) out = out.concat(walkCode(p));
-    else if (e.name.endsWith('.ts') || e.name.endsWith('.tsx')) out.push(p);
+    else if (e.name.endsWith('.ts') || e.name.endsWith('.tsx')) {
+      try { if (statSync(p).size <= MAX_FILE_BYTES) out.push(p); } catch { /* unreadable → skip */ }
+    }
   }
   return out;
 }
@@ -286,6 +319,34 @@ function card(path: string, module: string, symbol: string | null, signature: st
 function resolveImport(fromRel: string, spec: string): string {
   if (spec.startsWith('@/')) return spec.slice(2); // tsconfig paths: @/* → 루트상대
   return toPosix(join(dirname(fromRel), spec)).replace(/\.js$/, '');
+}
+// Resolve a bare import target to an actual file node key (try ext-less alias/relative as .ts/.tsx/index).
+function resolveToFileKey(toRel: string, fileKeyByPath: Map<string, string>): string | undefined {
+  const base = toRel.replace(/\.(ts|tsx|js)$/, '');
+  for (const cand of [toRel, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]) {
+    const dst = fileKeyByPath.get(cand);
+    if (dst) return dst;
+  }
+  return undefined;
+}
+// Collect identifiers that are called / instantiated / rendered (JSX) — call-edge candidates.
+function collectUsedNames(sf: ts.SourceFile): Set<string> {
+  const used = new Set<string>();
+  const rootId = (e: ts.Expression): string | null =>
+    ts.isIdentifier(e) ? e.text : ts.isPropertyAccessExpression(e) ? rootId(e.expression) : null;
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+      const id = rootId(node.expression);
+      if (id) used.add(id);
+    } else if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const tag = node.tagName;
+      if (ts.isIdentifier(tag)) used.add(tag.text);
+      else if (ts.isPropertyAccessExpression(tag)) { const r = rootId(tag); if (r) used.add(r); }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return used;
 }
 function pushMember(map: Map<string, string[]>, k: string, v: string): void {
   const a = map.get(k) ?? [];
