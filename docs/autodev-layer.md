@@ -146,7 +146,7 @@ interface AgentDriver {
 CREATE TABLE agent_runs (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   repo          text NOT NULL,
-  kind          text NOT NULL,          -- bug_fix | feature_gap | enhancement
+  kind          text NOT NULL,          -- bug_fix | feature_gap | enhancement | refactor
   ref_id        text NOT NULL,          -- proposal_reviews와 동일 안정키
   branch        text,
   status        text NOT NULL,          -- §2 상태머신
