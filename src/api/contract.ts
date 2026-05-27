@@ -25,22 +25,66 @@ export interface DashboardData { pipeline: PipelineStage[]; categories: Category
 // `status` standardized on 'error' (web mock previously used 'err'; both sides now agree on 'error').
 export interface Source { id: string; kind: string; product: string; name: string; region: string; rate: number; lastSync: string; status: 'ok' | 'warn' | 'error'; own: boolean; }
 
-export interface RawReviewRow { id: string; src: string; sentiment: string; rating: number | null; lang: string; text: string; category: string; severity?: string; feature?: string | null; fstate?: string | null; date: string; }
+// Reviews stream — GET /api/reviews. Mirrors web/src/data/mock-extras.ts RawReview 1:1.
+// `src` is the SourceKind union on the frontend; backend keeps it as a plain string
+// (source channel) since the DB stores arbitrary source identifiers. Fields with no DB
+// source yet (author/country/priority/confidence) are derived/defaulted in the handler.
+export interface RawReview {
+  id: string;
+  src: string;                                  // source channel (frontend narrows to SourceKind)
+  author: string;
+  country: string;
+  lang: string;
+  rating: number | null;
+  sentiment: 'pos' | 'neg' | 'neu' | 'mix';
+  priority: string;                             // 'P0'|'P1'|'P2'|'P3'
+  when: string;                                 // relative time label, e.g. '14 min ago'
+  text: string;
+  text_en?: string;
+  category: string;
+  confidence: number;
+  mapped: string | null;                        // mapped feature id (plain id) or null
+  mappedLabel: string;                          // human label for the mapped feature/gap
+  cluster: string | null;                       // signal_group id or null
+  tags: string[];
+  isOrphan?: boolean;                           // mapped to a gap (unmapped cluster)
+  filtered?: boolean;                           // moderation dropped it (spam/PII)
+}
 
-// Processing graph — React Flow nodes/edges (matches the existing ui-server.ts buildGraph output).
+// Processing graph — DOMAIN data only (docs/web-architecture.md §5.1 S2 decision).
+// The backend returns the repo module tree + per-node sampled reviews; the client owns
+// layout (processing.tsx buildGraph builds ReactFlow nodes/edges + dagre). So: NO node
+// positions, NO 'f:'/'g:' ID prefixes, NO inline hex colors, NO style — those are all
+// presentation concerns derived on the frontend from `heat`/`kind` via CSS variables.
+//
 // Node kinds, canonical across UI + backend. 'gap' is an unmapped review cluster
 // (the web mock historically called these 'orphan'); both sides now use 'gap'.
 export type GraphNodeKind = 'repo' | 'module' | 'feature' | 'gap';
-// Node `data` carries the fields the frontend needs to theme/lay out a node.
-// IMPORTANT: no hex colors here — the UI derives all color from `heat`/`kind` via CSS
-// variables (Editorial Dark theme). The backend only supplies semantic data.
-export interface GraphNodeData { label: string; kind: GraphNodeKind; heat: number; isOrphan: boolean; }
-// Node IDs are PLAIN IDs (e.g. 't_ko', 'orphan_teams', 'root') — NOT 'f:'/'g:' prefixed.
-// The UI does side-panel and Reviews lookups by these raw IDs, so they are the canonical
-// key. Feature vs gap is disambiguated by `data.kind`, not by an ID prefix.
-export interface GraphNode { id: string; position: { x: number; y: number }; data: GraphNodeData; style?: Record<string, unknown>; }
-export interface GraphEdge { id: string; source: string; target: string; style?: Record<string, unknown>; }
-export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; }
+// A repo module/feature/gap node. IDs are PLAIN IDs (e.g. 't_ko', 'orphan_teams', 'root')
+// — NOT prefixed. The UI does side-panel and Reviews lookups by these raw IDs, so they are
+// the canonical key. Feature vs gap is disambiguated by `kind`, not by an ID prefix.
+// Mirrors web/src/data/mock.ts RepoModule exactly.
+export interface RepoModule {
+  id: string;
+  parent: string | null;                        // parent module id; null for repo root + gaps
+  label: string;
+  kind: GraphNodeKind;
+  heat: number;                                 // mapped-review count
+  branchTag?: string;
+  isOrphan?: boolean;                           // true for gap nodes
+}
+// A sampled review attached to a graph node. Mirrors web/src/data/mock.ts GraphReview.
+export interface GraphReview {
+  src: string;                                  // source channel (frontend narrows to SourceKind)
+  sentiment: 'pos' | 'neg' | 'neu' | 'mix';
+  rating: number | null;
+  lang: string;
+  text: string;
+  tags: string[];
+  date: string;                                 // relative time label
+}
+// /api/graph payload — matches useGraph.ts GraphPayload.
+export interface GraphData { modules: RepoModule[]; reviews: Record<string, GraphReview[]>; }
 
 export interface ProposalCard {
   id: string; kind: 'bug_fix' | 'feature_gap' | 'enhancement'; title: string; priority: number;

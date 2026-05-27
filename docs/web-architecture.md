@@ -152,7 +152,7 @@ architecture.md §6 백엔드 배선 로드맵과 맞물리게:
 
 - **S1 — `/api/graph`** (`src/api/routes/graph.ts`): contract는 평문 ID(`t_ko`)·`data:{label,kind,heat,isOrphan}`·색 없음(프론트가 CSS var로 테마)을 선언하나, `buildGraph`는 여전히 `f:`/`g:` 접두사 ID·`data:{label}`만·인라인 hex 색(`#0b3a52`…)을 방출한다. → `buildGraph`를 contract 모양으로 수정.
 - **S1 — `/api/reviews`** (`src/api/routes/reviews.ts`): 핸들러가 방출하는 `RawReviewRow`와 페이지/`mock-extras`가 소비하는 `RawReview`(`author,country,priority,when,confidence,mapped,…`)가 거의 disjoint. → 핸들러를 mock 모양으로 정렬.
-- **S2 — 그래프 shape 단일화**: 현재 그래프 표현이 3가지(mock `RepoModule[]`+클라 빌드 / contract `GraphData` / 백엔드 `buildGraph`)다. 프론트가 도메인 `RepoModule[]`을 받을지 pre-built `GraphData`를 받을지 **하나로 정하고** contract·`useGraph`·핸들러를 거기에 맞춘다. (현재 `useGraph`는 `RepoModule[]`을 받아 `processing.tsx`의 `buildGraph(modules)`로 클라 렌더 — 이 방향을 canonical로 둘지 결정.)
+- **S2 — 그래프 shape 단일화 (결정됨)**: canonical = **백엔드는 도메인 데이터를 주고, 클라가 레이아웃을 소유**한다. 즉 `/api/graph`는 `{ modules: RepoModule[], reviews: Record<id, GraphReview[]> }`(= `useGraph`의 `GraphPayload`)를 반환하고, ReactFlow 노드/엣지·dagre 배치는 `processing.tsx`의 `buildGraph`가 클라에서 만든다. 근거: 레이아웃은 표현(presentation) 관심사라 서버에 두면 결합이 늘고, Wave 1A의 `useGraph`가 이미 이 모양을 가정한다. → contract의 ReactFlow `GraphData`/`GraphNode`/`GraphEdge`를 **도메인 타입(`RepoModule`/`GraphReview`)으로 교체**하고 `buildGraph` 핸들러를 거기에 맞춘다(hex 색·`f:`/`g:` 접두사·노드 좌표 전부 제거).
 
 > 즉 "플래그 한 줄로 live 스왑"이 graph/reviews에서는 핸들러를 먼저 고쳐야 성립한다. 그 전까지 두 라우트는 사실상 mock-only로 본다.
 
