@@ -54,7 +54,7 @@ npm run codeflow:scan <repo> <rootDir>
 
 스캐너는 **JS/TS family**(`.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs`, `src/codeflow/languages.ts` 레지스트리) +
 다중 소스루트(app/components/lib/hooks/client/server 등)를 지원하며 모듈→기능 description에
-멤버 심볼명을 넣어 매핑 판단의 재료를 준다. (`.vue`·CommonJS 엣지는 미지원 — 한계는 `docs/codeflow-layer.md` §0.) 매핑 대상 codebase는 `TARGET_REPO`(기본
+멤버 심볼명을 넣어 매핑 판단의 재료를 준다. **CommonJS(`require`/`module.exports`)와 `.vue` SFC도 지원**(scope-aware 멤버콜 포함; 익명/passthrough export·`@/` 별칭은 미해소 — `docs/codeflow-layer.md` §0). 매핑 대상 codebase는 `TARGET_REPO`(기본
 `tete-lab/automated-trading-system`), feature는 `repo`로 스코프되어 여러 codebase가 공존.
 
 ### 파이프라인 (구현된 11 stage)

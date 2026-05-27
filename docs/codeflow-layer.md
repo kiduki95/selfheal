@@ -36,12 +36,15 @@ const risk = classifyCodeRisk(c.path, c.module, c.symbol, c.desc);              
 > **as-built 갱신** (이 §0의 "CODE[] 대체" 목표는 이미 달성됨): 실제 스캐너는 `src/codeflow/scan.ts`다.
 > tree-sitter 네이티브 바이너리 대신 **이미 있는 `typescript` 의존성의 Compiler API**로 파싱한다(§5 결정과 일치
 > — 크로스플랫폼·네이티브 빌드 0). 파싱 대상 언어는 **`src/codeflow/languages.ts` 레지스트리** 단일 출처로
-> 선언한다: 현재 **JS/TS family**(`.ts/.tsx/.js/.jsx/.mjs/.cjs`) — TS가 JS의 상위집합이라 한 파서가 패밀리
-> 전체를 커버하고 `ScriptKind`만 다르다. 새 언어(예: Python)는 레지스트리에 추가하며, 진짜 다른 파서가
+> 선언한다: 현재 **JS/TS family**(`.ts/.tsx/.js/.jsx/.mjs/.cjs`) + **`.vue` SFC** — TS가 JS의 상위집합이라
+> 한 파서가 JS/TS 패밀리를 커버하고(`ScriptKind`만 다름), `.vue`는 `prepareSource`가 모든 `<script>` 블록을
+> 떼어 JS/TS로 파싱한다(Vue3 dual-block 포함). 새 언어(예: Python)는 레지스트리에 추가하며, 진짜 다른 파서가
 > 처음 들어올 때 중립 LanguageParser 인터페이스를 추출한다(그때 실제 seam을 알게 됨 — 조기 추상화 회피).
-> **알려진 한계**: (1) `.vue`는 아직 미지원. (2) CommonJS(`require`/`module.exports`)는 ES 모듈 구문이
-> 아니라 파일/모듈 노드는 만들어지나 import/calls 엣지는 안 잡힌다 → blast-radius가 얕다. 빈 스캔은
-> `scripts/codeflow-scan.ts`에서 **loud-fail**(persist의 파괴적 rebuild가 기존 그래프를 비우지 못하게).
+> **CommonJS 지원**(`src/codeflow/commonjs.ts`): `require()`→imports 엣지+네임스페이스 바인딩,
+> `module.exports`/`.X`/`exports.X`→심볼. `ns.method()` 멤버콜은 **scope-aware**로 해소(로컬 shadow가
+> false 엣지 안 냄). kiduki-gcs 실측: 0→354 노드(imports 112·**calls 104**). **알려진 한계**: 익명/passthrough
+> export(`module.exports = router`, `module.exports = require('…')`, `mongoose.model(…)`)·`Object.assign`·`@/` 별칭은
+> 미해소(전부 *missing* 엣지로만 degrade, false 없음). 빈 스캔은 `scripts/codeflow-scan.ts`에서 **loud-fail**.
 
 ---
 
