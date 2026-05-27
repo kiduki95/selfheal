@@ -1,27 +1,21 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { envelope, type ApiEnv } from '../contract.js';
+import { envelope, type ApiEnv, type Proposal } from '../contract.js';
 import { proposalsStale } from '../../insight/insight.js';
+import { queryProposals, toProposal } from './_proposal-map.js';
 
 const r = new Hono<ApiEnv>();
 
-// GET /api/proposals — Insight proposals, highest priority first, with HITL decision joined in.
+// GET /api/proposals — Insight proposals, highest priority first, mapped to the frontend
+// `Proposal` contract with the HITL decision joined in (see _proposal-map.ts for the mapping).
 // Flags staleness (#2): if reviews were processed after the last insight run, the note warns to re-run.
 r.get('/', async (c) => {
-  const rows = await c.var.db.query<any>(
-    `SELECT p.id, p.kind, p.title, p.priority, p.target_module, p.placement, p.body,
-            p.evidence->>'verdict' AS verdict, p.evidence->>'band' AS band,
-            p.evidence->>'effort' AS effort, p.evidence->>'effort_weeks' AS effort_weeks,
-            COALESCE(pr.decision, 'pending') AS decision, pr.note AS decision_note, pr.decided_at
-     FROM proposals p
-     LEFT JOIN proposal_reviews pr ON pr.repo = p.repo AND pr.kind = p.kind AND pr.ref_id = p.ref_id
-     WHERE p.repo = $1 ORDER BY p.priority DESC`,
-    [c.var.repo],
-  );
+  const rows = await queryProposals(c.var.db, c.var.repo);
+  const data: Proposal[] = rows.map(toProposal);
   const { lastProcessed, lastProposal } = await c.var.db.processingStamps(c.var.repo);
   const note = proposalsStale(lastProcessed, lastProposal) ? 'stale: reviews processed since last insight run — re-run insight (or npm run pipeline)' : undefined;
-  return c.json(envelope(rows, c.var.repo, 'live', note));
+  return c.json(envelope(data, c.var.repo, 'live', note));
 });
 
 // --- HITL gate: approve / reject ---

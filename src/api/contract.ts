@@ -20,7 +20,16 @@ export const envelope = <T>(data: T, repo: string, source: 'live' | 'mock' = 'li
 export interface PipelineStage { num: string; name: string; value: number; unit: string; sub: string; sparkData: number[]; }
 export interface Category { name: string; count: number; share: number; trend: 'up' | 'down' | 'flat'; pct: number; }
 export interface ActivityItem { kind: string; at: string; text: string; link: string; }
-export interface DashboardData { pipeline: PipelineStage[]; categories: Category[]; activity: ActivityItem[]; }
+// /api/dashboard payload — mirrors web/src/api/hooks/useDashboard.ts DashboardData 1:1.
+// Surfaces the funnel + categories + activity feed AND the proposal queue + agent runs
+// the dashboard renders inline.
+export interface DashboardData {
+  pipeline: PipelineStage[];
+  categories: Category[];
+  activity: ActivityItem[];
+  proposals: Proposal[];
+  agents: AgentRun[];
+}
 
 // `status` standardized on 'error' (web mock previously used 'err'; both sides now agree on 'error').
 export interface Source { id: string; kind: string; product: string; name: string; region: string; rate: number; lastSync: string; status: 'ok' | 'warn' | 'error'; own: boolean; }
@@ -86,12 +95,60 @@ export interface GraphReview {
 // /api/graph payload — matches useGraph.ts GraphPayload.
 export interface GraphData { modules: RepoModule[]; reviews: Record<string, GraphReview[]>; }
 
-export interface ProposalCard {
-  id: string; kind: 'bug_fix' | 'feature_gap' | 'enhancement'; title: string; priority: number;
-  target_module: string | null; placement: string | null; body: string; verdict?: string | null;
+// Insight proposal card — GET /api/proposals + dashboard inline. Mirrors
+// web/src/data/mock.ts Proposal 1:1. Built from a DB row by src/api/routes/_proposal-map.ts.
+// `column` is the HITL kanban lane; `pri` is a small integer rank (0 = most urgent).
+// Optional fields (problem/approver/rejector/expectedImpact/similar/agent) are present
+// only when the underlying data exists.
+export interface Proposal {
+  id: string;
+  title: string;
+  cluster: string;                              // human cluster label (error signature / feature)
+  impacted: number;                             // corroboration (bug) or demand (gap/enh)
+  effort: string;                               // human effort estimate, e.g. '2-3 wks'
+  pri: number;                                  // band rank: critical=0..low=3 (4=unknown)
+  confidence: number;                           // 0..1
+  column: 'pending' | 'approved' | 'in-dev' | 'rejected';
+  target: string;                               // target_module (code path or feature label)
+  targetLabel: string;                          // resolved human label for the target
+  skill: string;                                // derived from kind (debugging/feature-dev/enhancement)
+  impactScore: number;                          // unified 0-100 impact score (= proposals.priority)
+  problem?: string;
+  proposal?: string;
+  expectedImpact?: string;
+  sources: Record<string, number>;             // per-source review counts backing the cluster
+  similar?: number;
+  approver?: { name: string; at: string };
+  rejectReason?: string;
+  rejector?: { name: string; at: string };
+  agent?: string;
 }
 
-export interface AgentRun { id: string; proposal: string; title: string; branch: string; status: string; progress: number; }
+// Auto-Dev agent run — mirrors web/src/data/mock.ts AgentRun + AgentStep 1:1.
+// The Auto-Dev layer is not built yet, so /api/dashboard returns agents: [] for now.
+export interface AgentStep {
+  label: string;
+  desc: string;
+  state: 'done' | 'active' | 'idle' | 'failed';
+  t?: string;
+}
+export interface AgentRun {
+  id: string;
+  proposal: string;
+  title: string;
+  branch: string;
+  status: 'running' | 'review-needed' | 'failed' | 'merged';
+  progress: number;
+  started: string;
+  eta: string;
+  issue: number;
+  skill: string;
+  steps: AgentStep[];
+  diff: { added: number; removed: number; files: number };
+  pr?: { number: number; title: string; checks: number; passing: number; merged?: boolean };
+  failedAt?: number;
+  error?: string;
+}
 
 // Audit/activity event — aligned to the richer web mock shape (web/src/data/mock-extras.ts).
 // The earlier {at, action} pair was too thin for the Activity timeline UI (day grouping,
