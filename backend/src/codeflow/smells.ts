@@ -3,7 +3,7 @@
 // is `untested_hotspot` = churn × complexity × fan-in on an UNtested file (CodeScene's behavioral thesis:
 // debt in high-activity, complex, depended-on, untested code has the highest interest rate).
 
-export type SmellKind = 'god_file' | 'complex_function' | 'untested_hotspot';
+export type SmellKind = 'god_file' | 'complex_function' | 'untested_hotspot' | 'hidden_coupling' | 'boundary_coupling';
 export type Severity = 'low' | 'medium' | 'high' | 'critical';
 
 // One artifact's deterministic metrics (file or symbol). Churn/has_test only meaningful for files.
@@ -90,4 +90,31 @@ export function detectSmells(metrics: ArtifactMetric[], t: SmellThresholds = DEF
 // file, its symbols' complex_function scores — scan.ts does the file↔symbol attribution). Compounding.
 export function healthFromSmells(scores: number[]): number {
   return clamp(100 - scores.reduce((a, b) => a + b, 0));
+}
+
+// Per-file change-coupling stats (co-change crossed with the structural graph + module boundaries by scan.ts).
+export interface CouplingStat {
+  fileKey: string;
+  hiddenPartners: string[]; // co-change partners with NO structural edge (implicit dependency — the surprise)
+  crossPartners: string[]; // co-change partners in a DIFFERENT module (boundary-spanning — architectural decay)
+  maxHiddenConfidence: number;
+  maxCrossConfidence: number;
+}
+
+// Coupling smells (code-health, co-change). hidden_coupling = "changes together but no code link" (the
+// dependency static analysis can't see); boundary_coupling = "changes together across a module boundary"
+// (responsibility leaked / wrong seams). Score = strongest partner confidence, lightly amplified by count.
+export function detectCouplingSmells(stats: CouplingStat[]): SmellSpec[] {
+  const out: SmellSpec[] = [];
+  for (const s of stats) {
+    if (s.hiddenPartners.length) {
+      const score = clamp(s.maxHiddenConfidence * 100 * (1 + 0.1 * (s.hiddenPartners.length - 1)));
+      out.push({ artifactKey: s.fileKey, kind: 'hidden_coupling', severity: severityOf(score), score, evidence: { partners: s.hiddenPartners.slice(0, 8), confidence: s.maxHiddenConfidence, count: s.hiddenPartners.length } });
+    }
+    if (s.crossPartners.length) {
+      const score = clamp(s.maxCrossConfidence * 100 * (1 + 0.1 * (s.crossPartners.length - 1)));
+      out.push({ artifactKey: s.fileKey, kind: 'boundary_coupling', severity: severityOf(score), score, evidence: { partners: s.crossPartners.slice(0, 8), confidence: s.maxCrossConfidence, count: s.crossPartners.length } });
+    }
+  }
+  return out;
 }

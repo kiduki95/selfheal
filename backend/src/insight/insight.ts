@@ -171,8 +171,14 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
     const kindsKo = c.kinds.map((k) => SMELL_KO[k] ?? k).join(', ');
     const title = `[refactor] ${c.path} — ${kindsKo} (health ${c.health_score ?? '?'})`;
     const smellLine = c.smells.map((s) => `${SMELL_KO[s.kind] ?? s.kind}(${s.score}/${s.severity})`).join(', ');
-    const body = `## 코드 건강 신호 (공급측 — 코드가 스스로 신고)\n- 파일: \`${c.path}\` · 모듈: \`${c.module}\`\n- 메트릭: ${c.loc ?? '?'}줄 · 복잡도 ${c.cyclomatic ?? '?'} · 의존(fan-in) ${c.fan_in ?? 0} · 최근변경(churn) ${churn} · health ${c.health_score ?? '?'}/100\n- 냄새: ${smellLine}\n- **impact ${impact.score} (${impact.band})** — 부채이자(오염도 × 활동)\n\n→ 이 모듈에 기능/버그 작업을 올리기 전 정리(Preparatory Refactoring) 권장. Auto-Dev는 행위보존 검증으로 안전 리팩토링(후속 단계).`;
-    await db.insertProposal({ repo, kind: 'refactor', ref_id: c.path, title, body, priority: impact.score, target_module: c.module, placement: 'existing_module', evidence: { smells: c.smells, loc: c.loc, cyclomatic: c.cyclomatic, fan_in: c.fan_in, churn, health: c.health_score, max_score: c.max_score, impact: impact.score, band: impact.band } });
+    // "왜 바뀌나" — change-coupling partners (Tornhill). Hidden/cross-module partners reveal the
+    // entangled responsibilities a size/complexity metric can't see (사용자 방법론 1번·4번).
+    const partners = await db.cochangePartnersFor(repo, c.path);
+    const whyLine = partners.length
+      ? partners.map((p) => `\`${p.dst_path}\`(${Math.round(p.confidence * 100)}%${p.hidden ? ', 숨은의존' : ''}${p.cross_module ? ', 타모듈' : ''})`).join(', ')
+      : '(이력상 함께 바뀌는 파일 없음)';
+    const body = `## 코드 건강 신호 (공급측 — 코드가 스스로 신고)\n- 파일: \`${c.path}\` · 모듈: \`${c.module}\`\n- 메트릭: ${c.loc ?? '?'}줄 · 복잡도 ${c.cyclomatic ?? '?'} · 의존(fan-in) ${c.fan_in ?? 0} · 최근변경(churn) ${churn} · health ${c.health_score ?? '?'}/100\n- 냄새: ${smellLine}\n- **왜 바뀌나(함께 변경되는 파일)**: ${whyLine}\n- **impact ${impact.score} (${impact.band})** — 부채이자(오염도 × 활동)\n\n→ 이 모듈에 기능/버그 작업을 올리기 전 정리(Preparatory Refactoring) 권장. '숨은의존/타모듈' 파트너가 있으면 책임이 엉켜 있다는 신호 — 경계 재정렬부터. Auto-Dev는 행위보존 검증으로 안전 리팩토링(후속 단계).`;
+    await db.insertProposal({ repo, kind: 'refactor', ref_id: c.path, title, body, priority: impact.score, target_module: c.module, placement: 'existing_module', evidence: { smells: c.smells, loc: c.loc, cyclomatic: c.cyclomatic, fan_in: c.fan_in, churn, health: c.health_score, max_score: c.max_score, cochange: partners, impact: impact.score, band: impact.band } });
     out.push({ kind: 'refactor', title, priority: impact.score, target_module: c.module, placement: 'existing_module', body, band: impact.band });
   }
 

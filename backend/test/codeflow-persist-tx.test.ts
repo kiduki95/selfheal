@@ -23,6 +23,7 @@ function fixtureScan(): ScanResult {
     edges: [{ srcKey: 'a.ts', dstKey: 'a.ts#Foo', kind: 'contains' }],
     features: [],
     smells: [],
+    cochange: [],
   };
 }
 

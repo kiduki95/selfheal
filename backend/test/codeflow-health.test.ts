@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ts from 'typescript';
 import { cyclomaticComplexity, loc, fileLoc } from '../src/codeflow/metrics.js';
-import { detectSmells, healthFromSmells, type ArtifactMetric } from '../src/codeflow/smells.js';
+import { detectSmells, healthFromSmells, detectCouplingSmells, type ArtifactMetric, type CouplingStat } from '../src/codeflow/smells.js';
+import { cochangeFromCommits } from '../src/codeflow/cochange.js';
+import type { GitCommit } from '../src/codeflow/churn.js';
 import { scanRepo } from '../src/codeflow/scan.js';
 
 // Pure code-health units — no DB. Metrics (AST), smell thresholds, and scan-level wiring.
@@ -89,5 +91,75 @@ describe('scan-level code-health wiring', () => {
     const noChurn = scanRepo({ rootDir: root, repo: 'test/health' });
     expect(noChurn.smells.some((s) => s.kind === 'untested_hotspot')).toBe(false);
     expect(noChurn.smells.some((s) => s.kind === 'complex_function')).toBe(true);
+  });
+});
+
+describe('cochange — change coupling (pure)', () => {
+  const commit = (files: string[]): GitCommit => ({ day: '2026-05-01', files });
+  it('support counts co-occurrence; confidence is support/changes(src) and asymmetric', () => {
+    // a&b together 3×; a alone 1× → changes(a)=4, changes(b)=3. conf(a→b)=3/4=.75, conf(b→a)=3/3=1.0
+    const pairs = cochangeFromCommits([commit(['a', 'b']), commit(['a', 'b']), commit(['a', 'b']), commit(['a'])]);
+    const ab = pairs.find((p) => p.src === 'a' && p.dst === 'b')!;
+    const ba = pairs.find((p) => p.src === 'b' && p.dst === 'a')!;
+    expect(ab.support).toBe(3);
+    expect(ab.confidence).toBeCloseTo(0.75, 3);
+    expect(ba.confidence).toBeCloseTo(1.0, 3);
+  });
+  it('skips bulk-sweep commits and the support floor', () => {
+    const bulk = commit(Array.from({ length: 40 }, (_, i) => `f${i}`)); // > maxCommitFiles → ignored
+    const pairs = cochangeFromCommits([commit(['a', 'b']), bulk], { minSupport: 2 });
+    expect(pairs.some((p) => p.src === 'f0')).toBe(false); // bulk contributed nothing
+    expect(pairs.length).toBe(0); // a&b only once → below minSupport 2
+  });
+  it('handles file paths containing spaces (NUL delimiter, not space)', () => {
+    const f = 'src/components/Nav Bar.tsx'; // git emits this verbatim with core.quotePath=false
+    const pairs = cochangeFromCommits([commit([f, 'src/x.ts']), commit([f, 'src/x.ts'])]);
+    const p = pairs.find((q) => q.src === f && q.dst === 'src/x.ts');
+    expect(p).toBeDefined();
+    expect(p!.support).toBe(2); // not split/corrupted on the embedded space
+  });
+});
+
+describe('detectCouplingSmells (pure)', () => {
+  it('emits hidden_coupling / boundary_coupling from per-file stats', () => {
+    const stats: CouplingStat[] = [
+      { fileKey: 'a.js', hiddenPartners: ['x.js', 'y.js'], crossPartners: ['x.js'], maxHiddenConfidence: 0.8, maxCrossConfidence: 0.6 },
+      { fileKey: 'clean.js', hiddenPartners: [], crossPartners: [], maxHiddenConfidence: 0, maxCrossConfidence: 0 },
+    ];
+    const out = detectCouplingSmells(stats);
+    expect(out.find((s) => s.kind === 'hidden_coupling' && s.artifactKey === 'a.js')?.score).toBeGreaterThanOrEqual(80);
+    expect(out.some((s) => s.kind === 'boundary_coupling' && s.artifactKey === 'a.js')).toBe(true);
+    expect(out.some((s) => s.artifactKey === 'clean.js')).toBe(false); // no partners → no smell
+  });
+});
+
+describe('scan-level co-change: hidden vs structural, cross-module', () => {
+  let root: string;
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'codeflow-cc-'));
+    mkdirSync(join(root, 'src', 'lib'), { recursive: true });
+    mkdirSync(join(root, 'src', 'other'), { recursive: true });
+    // a imports lib/b (structural). c is unrelated.
+    writeFileSync(join(root, 'src', 'a.js'), `import { b } from './lib/b';\nexport function a() { return b(); }\n`);
+    writeFileSync(join(root, 'src', 'lib', 'b.js'), `export function b() { return 1; }\n`);
+    writeFileSync(join(root, 'src', 'other', 'c.js'), `export function c() { return 2; }\n`);
+  });
+  afterAll(() => { if (root) rmSync(root, { recursive: true, force: true }); });
+
+  it('flags hidden when no structural edge; structural pair is not hidden; both cross module', () => {
+    const scan = scanRepo({
+      rootDir: root, repo: 'test/cc',
+      cochange: [
+        { src: 'src/a.js', dst: 'src/lib/b.js', support: 5, confidence: 0.8 }, // structural (import) → NOT hidden
+        { src: 'src/a.js', dst: 'src/other/c.js', support: 4, confidence: 0.7 }, // no code link → hidden
+      ],
+    });
+    const toB = scan.cochange.find((e) => e.dst === 'src/lib/b.js')!;
+    const toC = scan.cochange.find((e) => e.dst === 'src/other/c.js')!;
+    expect(toB.hidden).toBe(false); // a imports b → structural link
+    expect(toC.hidden).toBe(true);  // a never references c → implicit dependency
+    expect(toC.crossModule).toBe(true);
+    expect(scan.smells.some((s) => s.kind === 'hidden_coupling' && s.artifactKey === 'src/a.js')).toBe(true);
+    expect(scan.smells.some((s) => s.kind === 'boundary_coupling' && s.artifactKey === 'src/a.js')).toBe(true);
   });
 });

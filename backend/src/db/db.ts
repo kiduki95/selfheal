@@ -662,6 +662,17 @@ export class Db {
     }));
   }
 
+  // Top change-coupling partners of a file ("왜 바뀌나" — what changes together with it). Drives the
+  // refactor proposal's responsibility narrative. hidden/cross_module are the high-signal kinds.
+  async cochangePartnersFor(repo: string, srcPath: string, limit = 6): Promise<{ dst_path: string; confidence: number; support: number; hidden: boolean; cross_module: boolean }[]> {
+    const rows = await this.query<{ dst_path: string; confidence: number; support: number; hidden: boolean; cross_module: boolean }>(
+      `SELECT dst_path, confidence, support, hidden, cross_module
+       FROM code_cochange WHERE repo=$1 AND src_path=$2 ORDER BY confidence DESC, support DESC LIMIT $3`,
+      [repo, srcPath, limit],
+    );
+    return rows.map((r) => ({ ...r, confidence: Number(r.confidence), support: Number(r.support) }));
+  }
+
   async insertProposal(p: { repo: string; kind: string; ref_id: string | null; title: string; body: string; priority: number; target_module: string | null; placement: string | null; evidence: unknown }): Promise<void> {
     await this.query(
       `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence)

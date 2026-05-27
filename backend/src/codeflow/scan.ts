@@ -5,8 +5,9 @@ import { join, relative, dirname, sep } from 'node:path';
 import { isCodeFile, isDeclarationFile, isTestSourceFile, isVendoredFile, prepareSource, resolveCandidates, stripSourceExt } from './languages.js';
 import { extractCommonJs } from './commonjs.js';
 import { cyclomaticComplexity, loc as nodeLoc, fileLoc } from './metrics.js';
-import { detectSmells, healthFromSmells, type ArtifactMetric, type SmellSpec } from './smells.js';
+import { detectSmells, healthFromSmells, detectCouplingSmells, type ArtifactMetric, type SmellSpec, type CouplingStat } from './smells.js';
 import type { Churn } from './churn.js';
+import type { CochangePair } from './cochange.js';
 
 // codeflow T1 parse (codeflow-layer.md §4) — TypeScript Compiler API로 결정론 추출 (Claude 0).
 // tree-sitter 대신 이미 있는 `typescript` 의존성 사용 → 네이티브 빌드 없이 크로스플랫폼.
@@ -54,6 +55,16 @@ export interface FeatureSpec {
   uiSurface?: string; // 컴포넌트 내부 UI 요소(헤딩/Label/htmlFor/탭값) — sub-feature 열거 재료
   fileKey?: string; // 컴포넌트가 사는 파일 노드 key (sub-feature 앵커)
 }
+// A change-coupling edge (co-change) crossed with the structural graph: `hidden` = no import/call link
+// between the files (implicit dependency); `crossModule` = the partner lives in a different module.
+export interface CochangeEdge {
+  src: string;
+  dst: string;
+  support: number;
+  confidence: number;
+  hidden: boolean;
+  crossModule: boolean;
+}
 export interface ScanResult {
   repo: string;
   ref: string;
@@ -61,6 +72,7 @@ export interface ScanResult {
   edges: EdgeSpec[];
   features: FeatureSpec[];
   smells: SmellSpec[];
+  cochange: CochangeEdge[];
 }
 export interface ScanOptions {
   rootDir: string;
@@ -70,6 +82,9 @@ export interface ScanOptions {
   // Injected git churn (path → {commits, days}); code-health hotspot input. Empty when not provided so
   // scanRepo stays pure/unit-testable without git (the codeflow-scan script computes + injects it).
   churn?: Map<string, Churn>;
+  // Injected change-coupling pairs (cochange.ts); crossed here with the structural graph to flag hidden/
+  // boundary coupling. Empty when not provided (same git-independence as churn).
+  cochange?: CochangePair[];
 }
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'coverage', '.next', 'public', 'styles', '.github', 'vendor', 'build', 'out', 'target', '.venv', '.turbo']);
@@ -370,12 +385,41 @@ export function scanRepo(opts: ScanOptions): ScanResult {
     });
   }
   const smells = detectSmells(metricList);
+
+  // Change coupling (co-change) crossed with the STRUCTURAL graph → hidden/boundary coupling smells +
+  // persisted edges. hidden = the pair changes together but has no import/call link (implicit dependency).
+  const cochange: CochangeEdge[] = [];
+  if (opts.cochange?.length) {
+    const undir = (a: string, b: string) => (a < b ? `${a} ${b}` : `${b} ${a}`);
+    const structPairs = new Set<string>(); // undirected file pairs with a structural link (import/cross-file call)
+    for (const e of edges) {
+      if (e.kind === 'imports') structPairs.add(undir(e.srcKey, e.dstKey));
+      else if (e.kind === 'calls') { const sf = fileOf(e.srcKey), df = fileOf(e.dstKey); if (sf !== df) structPairs.add(undir(sf, df)); }
+    }
+    const stats = new Map<string, CouplingStat>();
+    const statFor = (k: string): CouplingStat => {
+      let s = stats.get(k);
+      if (!s) { s = { fileKey: k, hiddenPartners: [], crossPartners: [], maxHiddenConfidence: 0, maxCrossConfidence: 0 }; stats.set(k, s); }
+      return s;
+    };
+    for (const p of opts.cochange) {
+      if (!fileKeyByPath.has(p.src) || !fileKeyByPath.has(p.dst)) continue; // both endpoints must be scanned files
+      const hidden = !structPairs.has(undir(p.src, p.dst));
+      const crossModule = (fileModule.get(p.src) ?? '') !== (fileModule.get(p.dst) ?? '');
+      cochange.push({ src: p.src, dst: p.dst, support: p.support, confidence: p.confidence, hidden, crossModule });
+      const st = statFor(p.src);
+      if (hidden) { st.hiddenPartners.push(p.dst); st.maxHiddenConfidence = Math.max(st.maxHiddenConfidence, p.confidence); }
+      if (crossModule) { st.crossPartners.push(p.dst); st.maxCrossConfidence = Math.max(st.maxCrossConfidence, p.confidence); }
+    }
+    for (const cs of detectCouplingSmells([...stats.values()])) smells.push(cs); // coupling smells also feed health below
+  }
+
   // Attribute each smell's score to its file (symbol smells → containing file) → per-file health.
   const fileScores = new Map<string, number[]>();
   for (const s of smells) { const f = fileOf(s.artifactKey); const a = fileScores.get(f) ?? []; a.push(s.score); fileScores.set(f, a); }
   for (const n of nodes) if (n.kind === 'file') n.metrics = { ...(n.metrics ?? {}), health: healthFromSmells(fileScores.get(n.key) ?? []) };
 
-  return { repo: opts.repo, ref: opts.ref ?? 'workdir', nodes, edges, features, smells };
+  return { repo: opts.repo, ref: opts.ref ?? 'workdir', nodes, edges, features, smells, cochange };
 }
 
 // --- helpers ---

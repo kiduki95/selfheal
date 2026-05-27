@@ -30,6 +30,7 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
     // The codeflow_runs row stays on the pool (outside the tx) so its status survives a rollback.
     const { edgeCount, byKind, smellCount } = await db.transaction(async (tx) => {
     // 전체 재수집: repo 범위 초기화 (FK: code_edges → code_artifact_registry)
+    await tx.query(`DELETE FROM code_cochange WHERE repo = $1`, [scan.repo]); // path-based, no FK
     await tx.query(`DELETE FROM code_smells WHERE repo = $1`, [scan.repo]); // FK → code_artifact_registry
     await tx.query(`DELETE FROM code_edges WHERE repo = $1`, [scan.repo]);
     await tx.query(`DELETE FROM code_artifact_registry WHERE repo = $1`, [scan.repo]);
@@ -81,6 +82,15 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
         [scan.repo, artifactId, s.kind, s.severity, s.score, JSON.stringify(s.evidence)],
       );
       smellCount++;
+    }
+
+    // 2c) code_cochange (change coupling) — path-based directed pairs with hidden/cross-module flags.
+    for (const cc of scan.cochange) {
+      await tx.query(
+        `INSERT INTO code_cochange (repo, src_path, dst_path, support, confidence, hidden, cross_module)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [scan.repo, cc.src, cc.dst, cc.support, cc.confidence, cc.hidden, cc.crossModule],
+      );
     }
 
     // 3) feature(코드 파생) upsert (+② enrich) + 멤버에 feature_id 누적 + parent_id 트리

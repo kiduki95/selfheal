@@ -34,6 +34,9 @@ function scanWithSmells(): ScanResult {
       { artifactKey: 'src/big.js', kind: 'untested_hotspot', severity: 'high', score: 70, evidence: { churn: 8, cyclomatic: 120, fan_in: 2 } },
       { artifactKey: 'src/big.js#mega', kind: 'complex_function', severity: 'medium', score: 45, evidence: { cyclomatic: 40 } },
     ],
+    cochange: [
+      { src: 'src/big.js', dst: 'src/other.js', support: 5, confidence: 0.8, hidden: true, crossModule: true },
+    ],
   };
 }
 

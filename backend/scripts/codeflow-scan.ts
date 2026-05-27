@@ -3,7 +3,8 @@ import { makeEmbeddingClient } from '../src/clients/embedding/index.js';
 import { makeLlmClient } from '../src/clients/llm/index.js';
 import { scanRepo, persistScan } from '../src/codeflow/index.js';
 import { CODE_EXTENSIONS } from '../src/codeflow/languages.js';
-import { computeChurn } from '../src/codeflow/churn.js';
+import { readGitCommits, churnFromCommits } from '../src/codeflow/churn.js';
+import { cochangeFromCommits } from '../src/codeflow/cochange.js';
 
 // codeflow dogfood: selfheal 자체 src를 스캔해 코드 그래프를 적재 + "모듈→기능" 요약 출력.
 // 네 비전 1단계 ("현재 코드베이스 기준 어느 모듈에 어떤 기능들이 있는지 스캔·정리")의 구현.
@@ -18,9 +19,11 @@ async function main() {
   const llm = enrich ? makeLlmClient() : undefined;
 
   console.log(`\n=== CodeFlow scan: ${repo} (${rootDir})  enrich=${enrich ? 'on' : 'off'} ===`);
-  // Git churn (code-health hotspot input) — best-effort; non-git rootDir → empty (no churn metrics).
-  const churn = computeChurn(rootDir);
-  const scan = scanRepo({ rootDir, repo, churn });
+  // ONE git-history pass → churn (hotspot input) + co-change (change coupling). Best-effort: non-git → empty.
+  const commits = readGitCommits(rootDir);
+  const churn = churnFromCommits(commits);
+  const cochange = cochangeFromCommits(commits);
+  const scan = scanRepo({ rootDir, repo, churn, cochange });
 
   // Fail loud on an empty scan (F2). persistScan does a destructive repo-scoped rebuild (DELETE then
   // INSERT), so persisting 0 nodes would silently WIPE the existing good graph and leave nothing — the
@@ -100,6 +103,18 @@ async function main() {
   );
   console.log(`\n--- unhealthiest files (health 0=worst) ---`);
   for (const u of unhealthy) console.log(`  ${String(u.health_score).padStart(3)}  ${u.path}  (loc=${u.loc} cyclo=${u.cyclomatic} churn=${u.churn_commits} test=${u.has_test ? 'y' : 'n'})`);
+
+  // change coupling (co-change) — strongest logical dependencies, esp. hidden (no code link) / cross-module.
+  const cc = await db.query<{ src_path: string; dst_path: string; confidence: string; support: string; hidden: boolean; cross_module: boolean }>(
+    `SELECT src_path, dst_path, confidence::text, support::text, hidden, cross_module
+     FROM code_cochange WHERE repo=$1 ORDER BY (hidden OR cross_module) DESC, confidence DESC, support DESC LIMIT 15`,
+    [repo],
+  );
+  console.log(`\n--- change coupling (함께 바뀌는 파일 — ⚠️=숨은의존/타모듈) ---`);
+  for (const c of cc) {
+    const flag = c.hidden ? '⚠️숨은' : c.cross_module ? '⚠️타모듈' : '  구조적';
+    console.log(`  ${flag}  ${Math.round(Number(c.confidence) * 100)}% (${c.support}회)  ${c.src_path} → ${c.dst_path}`);
+  }
 
   await db.close();
 }
