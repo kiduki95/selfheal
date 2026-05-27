@@ -673,12 +673,25 @@ export class Db {
     return rows.map((r) => ({ ...r, confidence: Number(r.confidence), support: Number(r.support) }));
   }
 
-  async insertProposal(p: { repo: string; kind: string; ref_id: string | null; title: string; body: string; priority: number; target_module: string | null; placement: string | null; evidence: unknown }): Promise<void> {
+  async insertProposal(p: { repo: string; kind: string; ref_id: string | null; title: string; body: string; priority: number; target_module: string | null; placement: string | null; evidence: unknown; prerequisite?: string | null }): Promise<void> {
     await this.query(
-      `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [p.repo, p.kind, p.ref_id, p.title, p.body, p.priority, p.target_module, p.placement, JSON.stringify(p.evidence ?? {})],
+      `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence, prerequisite)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [p.repo, p.kind, p.ref_id, p.title, p.body, p.priority, p.target_module, p.placement, JSON.stringify(p.evidence ?? {}), p.prerequisite ?? null],
     );
+  }
+
+  // Landing-zone gate (P3): is a proposal's prerequisite refactor already in progress/done? The blocked
+  // proposal stays held until the refactor it depends on has been picked up (decision in_dev/done).
+  async prerequisiteSatisfied(repo: string, refactorRefId: string): Promise<boolean> {
+    const rows = await this.query<{ decision: string }>(
+      `SELECT decision FROM proposal_reviews WHERE repo=$1 AND kind='refactor' AND ref_id=$2`,
+      [repo, refactorRefId],
+    );
+    const d = rows[0]?.decision;
+    // in_dev = picked up by Auto-Dev; done/merged = completed. Any of these releases the held proposal
+    // (merged included so a refactor that progresses in_dev→merged doesn't re-hold an already-released one).
+    return d === 'in_dev' || d === 'done' || d === 'merged';
   }
 
   // --- persist (tx) ---

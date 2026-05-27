@@ -46,6 +46,7 @@ export interface ProposalRow {
   target_module: string | null;
   placement: string | null;
   evidence: Record<string, unknown> | null;
+  prerequisite?: string | null; // P3 landing-zone: ref_id of a refactor that must land first (held until then)
 }
 
 // Common instruction block (spec §4): failing-repro-test-first (TDD), edit only within blast-radius,

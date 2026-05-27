@@ -1,5 +1,6 @@
 import type { Db } from '../db/db.js';
 import type { LlmClient } from '../clients/llm/types.js';
+import { config } from '../config.js';
 import { proposalImpact, type ImpactBand } from './impact.js';
 import { suppressionDecision, estimateEffort } from './lifecycle.js';
 import { deriveTrend, type Trend } from '../util/trend.js';
@@ -94,6 +95,45 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
   const realModules = new Set(await db.moduleNames(repo));
   const blastRadius = await db.moduleBlastRadius(repo); // CodeFlow impact → bug priority weight
 
+  // 0) refactor 제안 (code-health smells — 공급측 "코드=2번째 리뷰어"). 파일 단위로 묶음. FIRST so the
+  //    landing-zone gate (P3) can link demand-side proposals (bug/feature) to a prerequisite refactor.
+  //    ref_id = 파일 경로(안정) — artifact id는 스캔마다 재생성돼 HITL 승인이 풀리므로 경로로 키.
+  const toxicByPath = new Map<string, string>(); // toxic file path → refactor ref_id (= path)
+  const toxicByModule = new Map<string, { ref: string; score: number }>(); // module → worst toxic refactor
+  for (const c of await db.refactorCandidates(repo)) {
+    const churn = c.churn_commits ?? 0;
+    const impact = proposalImpact({ kind: 'refactor', smellScore: c.max_score, churn });
+    const kindsKo = c.kinds.map((k) => SMELL_KO[k] ?? k).join(', ');
+    const title = `[refactor] ${c.path} — ${kindsKo} (health ${c.health_score ?? '?'})`;
+    const smellLine = c.smells.map((s) => `${SMELL_KO[s.kind] ?? s.kind}(${s.score}/${s.severity})`).join(', ');
+    // "왜 바뀌나" — change-coupling partners (Tornhill). Hidden/cross-module partners reveal the
+    // entangled responsibilities a size/complexity metric can't see (사용자 방법론 1번·4번).
+    const partners = await db.cochangePartnersFor(repo, c.path);
+    const whyLine = partners.length
+      ? partners.map((p) => `\`${p.dst_path}\`(${Math.round(p.confidence * 100)}%${p.hidden ? ', 숨은의존' : ''}${p.cross_module ? ', 타모듈' : ''})`).join(', ')
+      : '(이력상 함께 바뀌는 파일 없음)';
+    const body = `## 코드 건강 신호 (공급측 — 코드가 스스로 신고)\n- 파일: \`${c.path}\` · 모듈: \`${c.module}\`\n- 메트릭: ${c.loc ?? '?'}줄 · 복잡도 ${c.cyclomatic ?? '?'} · 의존(fan-in) ${c.fan_in ?? 0} · 최근변경(churn) ${churn} · health ${c.health_score ?? '?'}/100\n- 냄새: ${smellLine}\n- **왜 바뀌나(함께 변경되는 파일)**: ${whyLine}\n- **impact ${impact.score} (${impact.band})** — 부채이자(오염도 × 활동)\n\n→ 이 모듈에 기능/버그 작업을 올리기 전 정리(Preparatory Refactoring) 권장. '숨은의존/타모듈' 파트너가 있으면 책임이 엉켜 있다는 신호 — 경계 재정렬부터. Auto-Dev는 행위보존 검증으로 안전 리팩토링(후속 단계).`;
+    await db.insertProposal({ repo, kind: 'refactor', ref_id: c.path, title, body, priority: impact.score, target_module: c.module, placement: 'existing_module', evidence: { smells: c.smells, loc: c.loc, cyclomatic: c.cyclomatic, fan_in: c.fan_in, churn, health: c.health_score, max_score: c.max_score, cochange: partners, impact: impact.score, band: impact.band } });
+    out.push({ kind: 'refactor', title, priority: impact.score, target_module: c.module, placement: 'existing_module', body, band: impact.band });
+    // Toxic = high/critical refactor. Demand-side work landing here gets gated behind it.
+    if (impact.band === 'critical' || impact.band === 'high') {
+      toxicByPath.set(c.path, c.path);
+      const cur = toxicByModule.get(c.module);
+      if (!cur || impact.score > cur.score) toxicByModule.set(c.module, { ref: c.path, score: impact.score });
+    }
+  }
+
+  // Landing-zone gate (P3, config.landingZoneGate): a demand-side proposal landing on a toxic file/module
+  // → the refactor that should land first (its ref_id = path). null when gate off or target is clean.
+  const prereqFor = (targetPath: string | null | undefined, module: string | null | undefined): string | null => {
+    if (!config.landingZoneGate) return null;
+    if (targetPath && toxicByPath.has(targetPath)) return toxicByPath.get(targetPath)!;
+    if (module && toxicByModule.has(module)) return toxicByModule.get(module)!.ref;
+    return null;
+  };
+  const gateNote = (prereq: string | null): string =>
+    prereq ? `> ⚠️ **착지대 게이트**: 대상이 toxic 모듈 — 선행 리팩토링 \`${prereq}\`을(를) 먼저 진행 권장(먼저 변경을 쉽게 만들고, 그다음 쉬운 변경). Auto-Dev는 그 리팩토링이 진행(in_dev/done)될 때까지 이 작업을 **보류**한다 — 풀려면 **선행 리팩토링도 승인**하거나, 정리를 원치 않으면 게이트를 끄세요(\`LANDING_ZONE_GATE=off\`).\n\n` : '';
+
   // 1) 버그픽스 제안 (defective 신호그룹)
   let suppressed = 0;
   const bugFeatureIds = new Set<string>(); // ⑤ features that also have an open bug → cross-ref on enhancement
@@ -112,9 +152,10 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
     const effort = estimateEffort({ kind: 'bug_fix', touchedModules: 1, isNewModule: false, blastRadius: callers }); // ⑥
     const samples = (g.samples ?? []).filter(Boolean) as string[];
     const title = `[bug] ${g.feature ?? '?'} — ${g.error_signature ?? '오류'} (증거 ${g.corroboration_count}건)`;
-    const body = `## 버그 신호\n- 기능: **${g.feature ?? '?'}** · 코드: \`${g.module_path ?? '미매핑'}\` [risk=${risk} (코드 ${g.risk_tier ?? '?'}, blast-radius ${callers}), severity ${sev}]\n- 에러 패밀리: \`${g.error_signature ?? '?'}\`\n- 증거: ${g.corroboration_count}건 · 플랫폼 ${(g.affected_platforms ?? []).join(', ')} · 버전 ${(g.affected_versions ?? []).join(', ')} · 추세 ${g.trend}\n- **impact ${impact.score} (${impact.band})** · 추정 공수 ${effort.size} (${effort.weeks})\n\n## 샘플 리뷰\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}\n\n→ Auto-Dev가 \`${g.module_path ?? '?'}\` 수정 PR 후보.`;
+    const prereq = prereqFor(g.module_path, g.code_module); // P3: landing on a toxic file/module?
+    const body = `${gateNote(prereq)}## 버그 신호\n- 기능: **${g.feature ?? '?'}** · 코드: \`${g.module_path ?? '미매핑'}\` [risk=${risk} (코드 ${g.risk_tier ?? '?'}, blast-radius ${callers}), severity ${sev}]\n- 에러 패밀리: \`${g.error_signature ?? '?'}\`\n- 증거: ${g.corroboration_count}건 · 플랫폼 ${(g.affected_platforms ?? []).join(', ')} · 버전 ${(g.affected_versions ?? []).join(', ')} · 추세 ${g.trend}\n- **impact ${impact.score} (${impact.band})** · 추정 공수 ${effort.size} (${effort.weeks})\n\n## 샘플 리뷰\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}\n\n→ Auto-Dev가 \`${g.module_path ?? '?'}\` 수정 PR 후보.`;
     if (g.feature_id) bugFeatureIds.add(String(g.feature_id).toLowerCase()); // ⑤ (normalize for safe compare)
-    await db.insertProposal({ repo, kind: 'bug_fix', ref_id: g.id, title, body, priority: impact.score, target_module: g.module_path ?? null, placement: null, evidence: { corroboration, sev, risk_effective: risk, code_risk: g.risk_tier, blast_radius: callers, trend: g.trend, impact: impact.score, band: impact.band, effort: effort.size, effort_weeks: effort.weeks } });
+    await db.insertProposal({ repo, kind: 'bug_fix', ref_id: g.id, title, body, priority: impact.score, target_module: g.module_path ?? null, placement: null, prerequisite: prereq, evidence: { corroboration, sev, risk_effective: risk, code_risk: g.risk_tier, blast_radius: callers, trend: g.trend, impact: impact.score, band: impact.band, effort: effort.size, effort_weeks: effort.weeks, prerequisite: prereq } });
     out.push({ kind: 'bug_fix', title, priority: impact.score, target_module: g.module_path ?? null, placement: null, body, band: impact.band, effort: effort.size });
   }
   if (suppressed) console.log(`  ④ suppressed ${suppressed} resolved bug proposal(s)`);
@@ -143,8 +184,9 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
     const impact = proposalImpact({ kind: 'feature_gap', demand, verdict: v.verdict, trend }); // #1/#2 unified; verdict = confidence
     const effort = estimateEffort({ kind: 'feature_gap', touchedModules: v.referenced.length + 1, isNewModule: isNew, blastRadius: isNew ? 0 : (blastRadius[plan.module] ?? 0) }); // ⑥
     const verifyMd = `\n\n## 🔎 검증 (코드 그래프 대조)\n- 배치: \`${plan.module}\` ${isNew ? '(신규 — 코드에 없음, 생성 필요)' : v.moduleExists ? '✅ 실제 모듈' : '⚠️ 코드에 없는데 기존이라 주장'}\n- 참조한 실제 모듈: ${v.referenced.join(', ') || '없음'}${v.invented.length ? `\n- ⚠️ 코드에 없는 참조(환각 의심): ${v.invented.join(', ')}` : ''}\n- **verdict: ${v.verdict}**`;
-    const body = `${plan.body}${verifyMd}\n\n---\n_연결_: ${plan.connection} · _수요_: ${demand}건 · _추세_: ${trend} · **impact ${impact.score} (${impact.band})** · 추정 공수 ${effort.size} (${effort.weeks})`;
-    await db.insertProposal({ repo, kind: 'feature_gap', ref_id: gap.id, title: plan.title, body, priority: impact.score, target_module: plan.module, placement: plan.placement, evidence: { demand, verdict: v.verdict, invented: v.invented, referenced: v.referenced, trend, impact: impact.score, band: impact.band, effort: effort.size, effort_weeks: effort.weeks } });
+    const prereq = isNew ? null : prereqFor(plan.module, plan.module); // P3: existing toxic module?
+    const body = `${gateNote(prereq)}${plan.body}${verifyMd}\n\n---\n_연결_: ${plan.connection} · _수요_: ${demand}건 · _추세_: ${trend} · **impact ${impact.score} (${impact.band})** · 추정 공수 ${effort.size} (${effort.weeks})`;
+    await db.insertProposal({ repo, kind: 'feature_gap', ref_id: gap.id, title: plan.title, body, priority: impact.score, target_module: plan.module, placement: plan.placement, prerequisite: prereq, evidence: { demand, verdict: v.verdict, invented: v.invented, referenced: v.referenced, trend, impact: impact.score, band: impact.band, effort: effort.size, effort_weeks: effort.weeks, prerequisite: prereq } });
     out.push({ kind: 'feature_gap', title: plan.title, priority: impact.score, target_module: plan.module, placement: plan.placement, body, band: impact.band, effort: effort.size });
   }
 
@@ -158,28 +200,10 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
     const alsoBug = bugFeatureIds.has(String(e.id).toLowerCase()); // ⑤ same feature has an open bug too
     const title = `[enhancement] ${e.pref_label} 개선 (요청 ${demand}건)`;
     const crossRef = alsoBug ? `\n- ⚠️ 이 기능엔 **열린 버그 제안**도 있음 — 함께 검토(중복 작업 방지)` : '';
-    const body = `## 개선 요청\n- 기능: **${e.pref_label}** (기존)\n- 수요: ${demand}건 · 추세 ${trend} · **impact ${impact.score} (${impact.band})** · 추정 공수 ${effort.size} (${effort.weeks})${crossRef}\n\n## 샘플\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}`;
-    await db.insertProposal({ repo, kind: 'enhancement', ref_id: e.id, title, body, priority: impact.score, target_module: e.pref_label, placement: 'existing_module', evidence: { demand, trend, impact: impact.score, band: impact.band, effort: effort.size, effort_weeks: effort.weeks, related_bug: alsoBug } });
+    const prereq = prereqFor(e.pref_label, e.pref_label); // P3: rarely matches (label, not a path/module)
+    const body = `${gateNote(prereq)}## 개선 요청\n- 기능: **${e.pref_label}** (기존)\n- 수요: ${demand}건 · 추세 ${trend} · **impact ${impact.score} (${impact.band})** · 추정 공수 ${effort.size} (${effort.weeks})${crossRef}\n\n## 샘플\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}`;
+    await db.insertProposal({ repo, kind: 'enhancement', ref_id: e.id, title, body, priority: impact.score, target_module: e.pref_label, placement: 'existing_module', prerequisite: prereq, evidence: { demand, trend, impact: impact.score, band: impact.band, effort: effort.size, effort_weeks: effort.weeks, related_bug: alsoBug, prerequisite: prereq } });
     out.push({ kind: 'enhancement', title, priority: impact.score, target_module: e.pref_label, placement: 'existing_module', body, band: impact.band, effort: effort.size });
-  }
-
-  // 4) refactor 제안 (code-health smells — 공급측 "코드=2번째 리뷰어"). 파일 단위로 묶음.
-  //    ref_id = 파일 경로(안정) — artifact id는 스캔마다 재생성돼 HITL 승인이 풀리므로 경로로 키.
-  for (const c of await db.refactorCandidates(repo)) {
-    const churn = c.churn_commits ?? 0;
-    const impact = proposalImpact({ kind: 'refactor', smellScore: c.max_score, churn });
-    const kindsKo = c.kinds.map((k) => SMELL_KO[k] ?? k).join(', ');
-    const title = `[refactor] ${c.path} — ${kindsKo} (health ${c.health_score ?? '?'})`;
-    const smellLine = c.smells.map((s) => `${SMELL_KO[s.kind] ?? s.kind}(${s.score}/${s.severity})`).join(', ');
-    // "왜 바뀌나" — change-coupling partners (Tornhill). Hidden/cross-module partners reveal the
-    // entangled responsibilities a size/complexity metric can't see (사용자 방법론 1번·4번).
-    const partners = await db.cochangePartnersFor(repo, c.path);
-    const whyLine = partners.length
-      ? partners.map((p) => `\`${p.dst_path}\`(${Math.round(p.confidence * 100)}%${p.hidden ? ', 숨은의존' : ''}${p.cross_module ? ', 타모듈' : ''})`).join(', ')
-      : '(이력상 함께 바뀌는 파일 없음)';
-    const body = `## 코드 건강 신호 (공급측 — 코드가 스스로 신고)\n- 파일: \`${c.path}\` · 모듈: \`${c.module}\`\n- 메트릭: ${c.loc ?? '?'}줄 · 복잡도 ${c.cyclomatic ?? '?'} · 의존(fan-in) ${c.fan_in ?? 0} · 최근변경(churn) ${churn} · health ${c.health_score ?? '?'}/100\n- 냄새: ${smellLine}\n- **왜 바뀌나(함께 변경되는 파일)**: ${whyLine}\n- **impact ${impact.score} (${impact.band})** — 부채이자(오염도 × 활동)\n\n→ 이 모듈에 기능/버그 작업을 올리기 전 정리(Preparatory Refactoring) 권장. '숨은의존/타모듈' 파트너가 있으면 책임이 엉켜 있다는 신호 — 경계 재정렬부터. Auto-Dev는 행위보존 검증으로 안전 리팩토링(후속 단계).`;
-    await db.insertProposal({ repo, kind: 'refactor', ref_id: c.path, title, body, priority: impact.score, target_module: c.module, placement: 'existing_module', evidence: { smells: c.smells, loc: c.loc, cyclomatic: c.cyclomatic, fan_in: c.fan_in, churn, health: c.health_score, max_score: c.max_score, cochange: partners, impact: impact.score, band: impact.band } });
-    out.push({ kind: 'refactor', title, priority: impact.score, target_module: c.module, placement: 'existing_module', body, band: impact.band });
   }
 
   out.sort((a, b) => b.priority - a.priority);

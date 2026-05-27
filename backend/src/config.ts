@@ -16,6 +16,11 @@ export const config = {
   // Auto-Dev coding-agent driver (layer 5). stub=LLM-free 결정론(키0) · claude-cli=구독 Claude(v2) ·
   // anthropic=Agent SDK(구독 소진 후). 기본 stub — makeLlmClient 패턴과 동일한 DI 스위치.
   agentDriver: (process.env.AGENT_DRIVER ?? 'stub') as 'stub' | 'claude-cli' | 'anthropic',
+  // Landing-zone gate (code-health P3, Preparatory Refactoring): when a bug/feature lands on a toxic
+  // module, Insight links a prerequisite refactor and Auto-Dev holds the proposal until that refactor
+  // is in progress/done — order enforcement, not a permanent block. OFF for teams that won't refactor
+  // legacy code. Default ON. (LANDING_ZONE_GATE=off|0|false to disable.)
+  landingZoneGate: !['off', '0', 'false'].includes((process.env.LANDING_ZONE_GATE ?? 'on').toLowerCase()),
 };
 
 // per-component 버전 (spec §3 versions). 클라이언트 종류에 따라 동적으로 결정해

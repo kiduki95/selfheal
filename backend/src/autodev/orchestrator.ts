@@ -1,6 +1,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Db } from '../db/db.js';
+import { config } from '../config.js';
 import { assembleBrief, type ProposalRow, type GroundedBrief, type BlastRadiusEntry } from './brief.js';
 import { createWorkspace, runBeforeRun, runAfterRun, type Workspace, type WorkspaceHooks } from './workspace.js';
 import { makeAgentDriver } from './drivers/index.js';
@@ -66,6 +67,13 @@ export async function runAutoDev(repo: string, opts: RunAutoDevOpts): Promise<Ru
   const approved = (await db.approvedProposals(repo)) as ProposalRow[];
   const queue: ProposalRow[] = [];
   for (const p of approved) {
+    // Landing-zone gate (P3, Preparatory Refactoring): hold a proposal whose prerequisite refactor is not
+    // yet in progress/done. Order enforcement, not a permanent block — the refactor (itself unblocked) is
+    // in the same queue, lands first, then this unblocks. Toggle: config.landingZoneGate (default on).
+    if (config.landingZoneGate && p.prerequisite && !(await db.prerequisiteSatisfied(p.repo, p.prerequisite))) {
+      log(`hold ${p.kind}/${String(p.ref_id).slice(0, 8)} — landing-zone gate: prerequisite refactor '${p.prerequisite}' not yet in progress`);
+      continue;
+    }
     const active = await db.activeRunFor(p.repo, p.kind, p.ref_id);
     if (!active) queue.push(p);
     else log(`skip ${p.kind}/${String(p.ref_id).slice(0, 8)} — active/succeeded run ${active.id} (${active.status})`);

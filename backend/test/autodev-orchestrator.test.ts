@@ -4,7 +4,18 @@ import { canConnect, setupTestDb, dropTestDb, truncateAll } from './helpers/test
 import { makeGitFixture, type GitFixture } from './helpers/gitfixture.js';
 import { runAutoDev } from '../src/autodev/orchestrator.js';
 import { StubAgentDriver, type StubScript } from '../src/autodev/drivers/stub.js';
+import { config } from '../src/config.js';
 import type { Db } from '../src/db/db.js';
+
+// Seed an approved proposal that depends on a refactor of `prereqPath` (landing-zone gate, P3).
+async function seedApprovedWithPrereq(db: Db, prereqPath: string, ref = REF): Promise<void> {
+  await db.query(
+    `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence, prerequisite)
+     VALUES ($1,'bug_fix',$2,'[bug] crash','repro',80,'src/orders',NULL,$3,$4)`,
+    [REPO, ref, JSON.stringify({ code_risk: 'low' }), prereqPath],
+  );
+  await db.decideProposal({ repo: REPO, kind: 'bug_fix', ref_id: ref, decision: 'approved' });
+}
 
 // End-to-end Auto-Dev orchestration tests (spec §9.2 cases). Run rows live in the isolated test DB;
 // the worktree/verify run against a hermetic git fixture; the StubAgentDriver makes the path fully
@@ -179,5 +190,31 @@ describe.skipIf(!reachable)('Auto-Dev orchestrator', () => {
     expect(outcomes[0]!.status).toBe('pr_open');
     const run = await db.getAgentRun(outcomes[0]!.runId);
     expect(run?.verdict?.manualReview).toBe(true);
+  });
+
+  it('landing-zone gate (P3): holds a proposal until its prerequisite refactor is in progress', async () => {
+    await seedApprovedWithPrereq(db, 'src/orders'); // bug depends on a refactor of src/orders (not started)
+
+    // gate ON (default) + prerequisite unsatisfied → held, nothing dispatched.
+    const held = await runAutoDev(REPO, opts(new StubAgentDriver(goodScript)));
+    expect(held).toHaveLength(0);
+
+    // the refactor goes in progress → prerequisite satisfied → the bug now dispatches.
+    await db.decideProposal({ repo: REPO, kind: 'refactor', ref_id: 'src/orders', decision: 'in_dev' });
+    const dispatched = await runAutoDev(REPO, opts(new StubAgentDriver(goodScript)));
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]!.status).toBe('pr_open');
+  });
+
+  it('landing-zone gate OFF: dispatches despite an unsatisfied prerequisite', async () => {
+    await seedApprovedWithPrereq(db, 'src/orders');
+    const prev = config.landingZoneGate;
+    (config as { landingZoneGate: boolean }).landingZoneGate = false;
+    try {
+      const out = await runAutoDev(REPO, opts(new StubAgentDriver(goodScript)));
+      expect(out[0]!.status).toBe('pr_open'); // gate off → no hold
+    } finally {
+      (config as { landingZoneGate: boolean }).landingZoneGate = prev;
+    }
   });
 });
