@@ -1,24 +1,29 @@
 // ============================================================
-// SelfHeal — App shell (sidebar, topbar, router)
+// SelfHeal — App shell (sidebar, topbar, router outlet)
 // ============================================================
+// `RootShell` is the root route's component: it renders the persistent
+// chrome (sidebar + topbar + page header) and hosts the routed page via
+// `children` (the router <Outlet/>). Routing is owned by router.tsx; theme,
+// onboarding wizard and session/RBAC are owned by the Zustand store.
 
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useRef } from 'react';
+import type { ReactNode } from 'react';
+import { useRouterState } from '@tanstack/react-router';
 import type { Route } from './types';
+import { routeFromPath } from './types';
 import { Icons } from './components/icons';
 import type { IconName } from './components/icons';
 import { Button, ToastProvider } from './components/ui';
 import { OverlayProvider, useOverlays } from './components/overlays';
-import { DashboardPage } from './pages/dashboard';
-import { SourcesPage } from './pages/sources';
-import { ReviewsPage } from './pages/reviews';
-import { ProcessingPage } from './pages/processing';
-import { InsightsPage } from './pages/insights';
-import { AgentPage } from './pages/agent';
-import { ActivityPage } from './pages/activity';
-import { SettingsPage } from './pages/settings';
 import { OnboardingFlow } from './pages/onboarding';
-
-type ThemeMode = 'dark' | 'light';
+import { useRouteNavigate } from './router';
+import {
+  useAppStore,
+  selectTheme,
+  selectWizardOpen,
+  canApprove,
+  canAdmin,
+} from './store';
 
 interface NavItem {
   id: Route;
@@ -71,6 +76,11 @@ function Sidebar({ route, setRoute, openOnboarding }: {
   openOnboarding: () => void;
 }) {
   const overlays = useOverlays();
+  // Identity + role come from the session store (mock default until a real
+  // /api/session hydrates it). The chip is presentational only.
+  const user = useAppStore((s) => s.user);
+  const userRole = useAppStore((s) => s.role);
+  const initials = user.name.split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase();
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -93,7 +103,11 @@ function Sidebar({ route, setRoute, openOnboarding }: {
               <div
                 key={it.id}
                 className={`nav-item ${route === it.id ? 'active' : ''}`}
+                role="button"
+                tabIndex={0}
+                aria-current={route === it.id ? 'page' : undefined}
                 onClick={() => setRoute(it.id)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setRoute(it.id); } }}
               >
                 <span className="nav-ico"><Ic /></span>
                 <span>{it.label}</span>
@@ -116,10 +130,10 @@ function Sidebar({ route, setRoute, openOnboarding }: {
           <span>Help & docs</span>
         </div>
         <div className="user-chip" onClick={(e) => overlays.openUserMenu(e.currentTarget.getBoundingClientRect())}>
-          <div className="avatar">MO</div>
+          <div className="avatar">{initials}</div>
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <div className="user-name">Maya Ortiz</div>
-            <div className="user-org">Loop · admin</div>
+            <div className="user-name">{user.name}</div>
+            <div className="user-org">{user.org} · {userRole}</div>
           </div>
           <Icons.ChevDown />
         </div>
@@ -128,13 +142,11 @@ function Sidebar({ route, setRoute, openOnboarding }: {
   );
 }
 
-function Topbar({ route, themeMode, setThemeMode }: {
-  route: Route;
-  themeMode: ThemeMode;
-  setThemeMode: (v: ThemeMode) => void;
-}) {
+function Topbar({ route }: { route: Route }) {
   const meta = PAGE_META[route];
   const overlays = useOverlays();
+  const theme = useAppStore(selectTheme);
+  const toggleTheme = useAppStore((s) => s.toggleTheme);
   const bellRef = useRef<HTMLButtonElement>(null);
   return (
     <div className="topbar">
@@ -152,12 +164,12 @@ function Topbar({ route, themeMode, setThemeMode }: {
           <input className="input" placeholder="Search reviews, modules, proposals…" readOnly style={{ cursor: 'pointer' }} onFocus={(e) => e.target.blur()} />
           <span className="kbd">⌘K</span>
         </div>
-        <Button variant="ghost" className="icon-only" leftIcon={<Icons.Calendar />} onClick={(e) => overlays.openDateRange(e.currentTarget.getBoundingClientRect())} title="Date range">
+        <Button variant="ghost" className="icon-only" leftIcon={<Icons.Calendar />} onClick={(e) => overlays.openDateRange(e.currentTarget.getBoundingClientRect())} title="Date range" aria-label="Date range">
         </Button>
-        <Button variant="ghost" className="icon-only" onClick={() => setThemeMode(themeMode === 'dark' ? 'light' : 'dark')} title="Toggle theme">
-          {themeMode === 'dark' ? <Icons.Sun /> : <Icons.Moon />}
+        <Button variant="ghost" className="icon-only" onClick={() => toggleTheme()} title="Toggle theme" aria-label="Toggle theme">
+          {theme === 'dark' ? <Icons.Sun /> : <Icons.Moon />}
         </Button>
-        <button ref={bellRef} className="btn ghost icon-only" title="Notifications" onClick={() => overlays.openNotifs(bellRef.current?.getBoundingClientRect())} style={{ position: 'relative' }}>
+        <button ref={bellRef} className="btn ghost icon-only" title="Notifications" aria-label="Notifications" onClick={() => overlays.openNotifs(bellRef.current?.getBoundingClientRect())} style={{ position: 'relative' }}>
           <Icons.Bell />
           <span style={{ position: 'absolute', top: 5, right: 6, width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)', boxShadow: '0 0 0 2px var(--bg)' }} />
         </button>
@@ -168,22 +180,22 @@ function Topbar({ route, themeMode, setThemeMode }: {
 
 // ----------------------------------------------------------------------------
 
-export function App() {
-  const [theme, setTheme] = useState<ThemeMode>('dark');
-  const [route, setRoute] = useState<Route>('dashboard');
-  const [showOnboarding, setShowOnboarding] = useState(false);
+/**
+ * Root route component. Renders the persistent app chrome and the routed page
+ * (passed as `children`, i.e. the router <Outlet/>). Theme + wizard state come
+ * from the store; the current `Route` is derived from the router location.
+ */
+export function RootShell({ children }: { children: ReactNode }) {
+  const setRoute = useRouteNavigate();
+  // Derive the active Route from the current pathname (router is source of
+  // truth). Subscribing to just the pathname avoids re-renders on search
+  // param changes (e.g. ?node= selection on the processing page).
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const route = routeFromPath(pathname);
 
-  // Apply theme to <html>
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-  }, [theme]);
-
-  // Listen for command-palette "open wizard" event
-  useEffect(() => {
-    const onOpen = () => setShowOnboarding(true);
-    window.addEventListener('selfheal:open-wizard', onOpen);
-    return () => window.removeEventListener('selfheal:open-wizard', onOpen);
-  }, []);
+  const wizardOpen = useAppStore(selectWizardOpen);
+  const openWizard = useAppStore((s) => s.openWizard);
+  const closeWizard = useAppStore((s) => s.closeWizard);
 
   const meta = PAGE_META[route];
 
@@ -191,9 +203,9 @@ export function App() {
     <ToastProvider>
       <OverlayProvider setRoute={setRoute}>
         <div className="app">
-          <Sidebar route={route} setRoute={setRoute} openOnboarding={() => setShowOnboarding(true)} />
+          <Sidebar route={route} setRoute={setRoute} openOnboarding={openWizard} />
           <div className="main">
-            <Topbar route={route} themeMode={theme} setThemeMode={setTheme} />
+            <Topbar route={route} />
             <div className="content">
               <div className="page" data-screen-label={`page-${route}`}>
                 {route !== 'settings' && (
@@ -206,19 +218,12 @@ export function App() {
                   </div>
                 )}
 
-                {route === 'dashboard'  && <DashboardPage  setRoute={setRoute} />}
-                {route === 'sources'    && <SourcesPage />}
-                {route === 'reviews'    && <ReviewsPage />}
-                {route === 'processing' && <ProcessingPage graphStyle="tree" />}
-                {route === 'insights'   && <InsightsPage />}
-                {route === 'agent'      && <AgentPage cardStyle="timeline" />}
-                {route === 'activity'   && <ActivityPage />}
-                {route === 'settings'   && <SettingsPage />}
+                {children}
               </div>
             </div>
           </div>
 
-          {showOnboarding && <OnboardingFlow onClose={() => setShowOnboarding(false)} />}
+          {wizardOpen && <OnboardingFlow onClose={closeWizard} />}
         </div>
       </OverlayProvider>
     </ToastProvider>
@@ -227,6 +232,11 @@ export function App() {
 
 function PageActions({ route, setRoute }: { route: Route; setRoute: (r: Route) => void }) {
   const overlays = useOverlays();
+  // RBAC: client gating is UX-only — the server re-checks token + role on every
+  // write/destructive route (docs/web-architecture.md §4.1). These selectors
+  // just hide/disable controls the current role may not use.
+  const approve = useAppStore(canApprove); // reviewer + admin
+  const admin = useAppStore(canAdmin);     // admin only
   if (route === 'dashboard') {
     return (
       <div className="page-actions">
@@ -240,7 +250,10 @@ function PageActions({ route, setRoute }: { route: Route; setRoute: (r: Route) =
     return (
       <div className="page-actions">
         <Button variant="ghost" leftIcon={<Icons.Filter />}>All sources</Button>
-        <Button variant="primary" leftIcon={<Icons.Plus />} onClick={() => overlays.openAddSource()}>Add source</Button>
+        {/* Add source is an admin-only write action. */}
+        {admin && (
+          <Button variant="primary" leftIcon={<Icons.Plus />} onClick={() => overlays.openAddSource()}>Add source</Button>
+        )}
       </div>
     );
   }
@@ -273,12 +286,15 @@ function PageActions({ route, setRoute }: { route: Route; setRoute: (r: Route) =
       <div className="page-actions">
         <Button variant="ghost" leftIcon={<Icons.Filter />}>All clusters</Button>
         <Button variant="ghost" leftIcon={<Icons.Slack />} onClick={() => overlays.openSlack('P-241')}>View Slack</Button>
-        <Button variant="primary" leftIcon={<Icons.Sparkles />} onClick={() => overlays.confirm({
-          title: 'Regenerate insights now?',
-          body: 'Runs claude-opus-4-7 against the top 12 clusters. Costs ~$3 and replaces this week\'s draft proposals. The next scheduled run (Mon 09:00 KST) will still happen.',
-          confirmLabel: 'Regenerate now',
-          onConfirm: () => overlays.toast?.({ title: 'Regenerating insights', body: '12 clusters · claude-opus-4-7 · eta ~2 min', icon: <Icons.Sparkles /> }),
-        })}>Regenerate insights</Button>
+        {/* Regenerate insights costs money + dispatches the LLM: reviewer/admin only. */}
+        {approve && (
+          <Button variant="primary" leftIcon={<Icons.Sparkles />} onClick={() => overlays.confirm({
+            title: 'Regenerate insights now?',
+            body: 'Runs claude-opus-4-7 against the top 12 clusters. Costs ~$3 and replaces this week\'s draft proposals. The next scheduled run (Mon 09:00 KST) will still happen.',
+            confirmLabel: 'Regenerate now',
+            onConfirm: () => overlays.toast?.({ title: 'Regenerating insights', body: '12 clusters · claude-opus-4-7 · eta ~2 min', icon: <Icons.Sparkles /> }),
+          })}>Regenerate insights</Button>
+        )}
       </div>
     );
   }
@@ -286,12 +302,15 @@ function PageActions({ route, setRoute }: { route: Route; setRoute: (r: Route) =
     return (
       <div className="page-actions">
         <Button variant="ghost" leftIcon={<Icons.Filter />}>All agents</Button>
-        <Button leftIcon={<Icons.Pause />} onClick={() => overlays.confirm({
-          title: 'Pause Auto-Dev queue?',
-          body: 'Running agents will finish their current step then halt. Queued runs won\'t start until you resume. Reviewers can still approve proposals.',
-          confirmLabel: 'Pause queue',
-          onConfirm: () => overlays.toast?.({ title: 'Queue paused', body: '4 agents halting after current step', icon: <Icons.Pause /> }),
-        })}>Pause queue</Button>
+        {/* Pausing the Auto-Dev queue is an admin-only control. */}
+        {admin && (
+          <Button leftIcon={<Icons.Pause />} onClick={() => overlays.confirm({
+            title: 'Pause Auto-Dev queue?',
+            body: 'Running agents will finish their current step then halt. Queued runs won\'t start until you resume. Reviewers can still approve proposals.',
+            confirmLabel: 'Pause queue',
+            onConfirm: () => overlays.toast?.({ title: 'Queue paused', body: '4 agents halting after current step', icon: <Icons.Pause /> }),
+          })}>Pause queue</Button>
+        )}
       </div>
     );
   }

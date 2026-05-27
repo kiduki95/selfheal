@@ -5,8 +5,8 @@
 import { Fragment, useState } from 'react';
 import type { ReactNode, MouseEvent } from 'react';
 import { Icons } from '../components/icons';
-import { Card, SectionHead, Badge, Button, SourceChip, Spark } from '../components/ui';
-import { RAW_REVIEWS } from '../data/mock-extras';
+import { Card, SectionHead, Badge, Button, SourceChip, Spark, SkeletonList, ErrorState } from '../components/ui';
+import { useReviews } from '../api/hooks/useReviews';
 import type { RawReview } from '../data/mock-extras';
 
 interface Filters {
@@ -23,7 +23,11 @@ export function ReviewsPage() {
     src: 'all', sentiment: 'all', priority: 'all', mapped: 'all',
     lang: 'all', search: '',
   });
-  const [selectedId, setSelectedId] = useState(RAW_REVIEWS[0].id);
+  // Selection starts unset; the first filtered row is used as a fallback below.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const { data, isLoading, isError, error, refetch } = useReviews();
+  const RAW_REVIEWS = data?.data ?? [];
 
   const filtered = RAW_REVIEWS.filter(r => {
     if (filters.src !== 'all' && r.src !== filters.src) return false;
@@ -141,21 +145,25 @@ export function ReviewsPage() {
         <SectionHead eyebrow="Stream" title="Raw reviews" />
         <div className="l-grid" style={{ alignItems: 'flex-start' }}>
           <Card className="col-8">
-            {filtered.map(r => (
+            {isLoading && <SkeletonList rows={6} />}
+            {isError && (
+              <ErrorState message={error instanceof Error ? error.message : 'Failed to load reviews.'} onRetry={() => refetch()} />
+            )}
+            {!isLoading && !isError && filtered.map(r => (
               <ReviewRow
                 key={r.id} r={r}
                 selected={r.id === selected?.id}
                 onClick={() => setSelectedId(r.id)}
               />
             ))}
-            {filtered.length === 0 && (
+            {!isLoading && !isError && filtered.length === 0 && (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--fg-subtle)', fontSize: 12 }}>
                 No reviews match these filters.
               </div>
             )}
           </Card>
 
-          {selected && (
+          {!isLoading && !isError && selected && (
             <div className="col-4">
               <ReviewDetail r={selected} />
             </div>

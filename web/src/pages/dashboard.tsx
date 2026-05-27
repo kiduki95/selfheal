@@ -6,9 +6,9 @@
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
 import { Icons } from '../components/icons';
-import { Card, SectionHead, Badge, Button, Spark, SparkBars, HeatRow, PriDot } from '../components/ui';
+import { Card, SectionHead, Badge, Button, Spark, SparkBars, HeatRow, PriDot, Skeleton, SkeletonList, ErrorState } from '../components/ui';
 import type { Route } from '../types';
-import { PIPELINE, CATEGORIES, PROPOSALS, ACTIVITY, AGENTS } from '../data/mock';
+import { useDashboard } from '../api/hooks/useDashboard';
 import type { ActivityItem, AgentRun } from '../data/mock';
 
 const HEATMAP = [
@@ -22,6 +22,56 @@ const HEATMAP = [
 ];
 
 export function DashboardPage({ setRoute }: { setRoute: (r: Route) => void }) {
+  const { data, isLoading, isError, error, refetch } = useDashboard();
+  const PIPELINE = data?.data.pipeline ?? [];
+  const CATEGORIES = data?.data.categories ?? [];
+  const ACTIVITY = data?.data.activity ?? [];
+  const PROPOSALS = data?.data.proposals ?? [];
+  const AGENTS = data?.data.agents ?? [];
+
+  if (isError) {
+    return (
+      <Card>
+        <ErrorState message={error instanceof Error ? error.message : 'Failed to load dashboard.'} onRetry={() => refetch()} />
+      </Card>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <Fragment>
+        <div className="pipeline" style={{ marginBottom: 'var(--section-gap)' }}>
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div className="pipe-stage" key={i}>
+              <Skeleton width="60%" height={12} />
+              <div style={{ marginTop: 10 }}><Skeleton width="40%" height={20} /></div>
+              <div style={{ marginTop: 10 }}><Skeleton width="100%" height={26} /></div>
+            </div>
+          ))}
+        </div>
+        <section className="section">
+          <SectionHead eyebrow="Health" title="At a glance" />
+          <div className="l-grid">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Card className="col-3" pad key={i}>
+                <Skeleton width="70%" height={11} />
+                <div style={{ marginTop: 10 }}><Skeleton width="50%" height={22} /></div>
+                <div style={{ marginTop: 10 }}><Skeleton width="100%" height={32} /></div>
+              </Card>
+            ))}
+          </div>
+        </section>
+        <section className="section">
+          <SectionHead eyebrow="Decide" title="Awaiting your review" />
+          <div className="l-grid">
+            <Card className="col-7" title="Approval queue"><SkeletonList rows={5} /></Card>
+            <Card className="col-5" title="Top categories"><SkeletonList rows={6} /></Card>
+          </div>
+        </section>
+      </Fragment>
+    );
+  }
+
   return (
     <Fragment>
       {/* === Pipeline hero strip === */}

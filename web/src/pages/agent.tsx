@@ -8,9 +8,10 @@
 import { Fragment, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { Icons } from '../components/icons';
-import { Card, SectionHead, Badge, Button, Tabs, PriDot } from '../components/ui';
+import { Card, SectionHead, Badge, Button, Tabs, PriDot, SkeletonList, ErrorState, EmptyState } from '../components/ui';
 import { useOverlays } from '../components/overlays';
-import { AGENTS, TERMINAL_LINES, type AgentRun } from '../data/mock';
+import { useAgents } from '../api/hooks/useAgents';
+import { type AgentRun, type TerminalLine } from '../data/mock';
 
 type CardStyle = 'timeline' | 'terminal' | 'compact';
 type AgentTab = 'active' | 'failed' | 'merged' | 'all';
@@ -18,6 +19,10 @@ type AgentTab = 'active' | 'failed' | 'merged' | 'all';
 export function AgentPage({ cardStyle }: { cardStyle: CardStyle }) {
   const [tab, setTab] = useState<AgentTab>('active');
   const [openId, setOpenId] = useState<string | null>(null);
+
+  const { data, isLoading, isError, error, refetch } = useAgents();
+  const AGENTS = data?.data.agents ?? [];
+  const TERMINAL_LINES = data?.data.terminalLines ?? [];
 
   const counts = {
     active:    AGENTS.filter(a => a.status === 'running' || a.status === 'review-needed').length,
@@ -96,17 +101,34 @@ export function AgentPage({ cardStyle }: { cardStyle: CardStyle }) {
           ]}
         />
         {/* Cards grid — col-4 × 3 across */}
-        <div className="l-grid">
-          {filtered.map(a => (
-            <div key={a.id} className="col-4">
-              <SummaryCard a={a} variant={cardStyle} onOpen={() => setOpenId(a.id)} />
-            </div>
-          ))}
-        </div>
+        {isError && (
+          <Card>
+            <ErrorState message={error instanceof Error ? error.message : 'Failed to load agent runs.'} onRetry={() => refetch()} />
+          </Card>
+        )}
+        {!isError && isLoading && (
+          <div className="l-grid">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Card className="col-4" key={i}><SkeletonList rows={2} /></Card>
+            ))}
+          </div>
+        )}
+        {!isError && !isLoading && filtered.length === 0 && (
+          <Card><EmptyState icon={<Icons.Robot />} title="No agent runs here" body="No Auto-Dev runs match this filter yet." /></Card>
+        )}
+        {!isError && !isLoading && filtered.length > 0 && (
+          <div className="l-grid">
+            {filtered.map(a => (
+              <div key={a.id} className="col-4">
+                <SummaryCard a={a} variant={cardStyle} terminalLines={TERMINAL_LINES} onOpen={() => setOpenId(a.id)} />
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {openAgent && (
-        <AgentDetailModal a={openAgent} onClose={() => setOpenId(null)} />
+        <AgentDetailModal a={openAgent} terminalLines={TERMINAL_LINES} onClose={() => setOpenId(null)} />
       )}
     </Fragment>
   );
@@ -118,9 +140,10 @@ export function AgentPage({ cardStyle }: { cardStyle: CardStyle }) {
 interface SummaryCardProps {
   a: AgentRun;
   variant: CardStyle;
+  terminalLines: TerminalLine[];
   onOpen: () => void;
 }
-function SummaryCard({ a, variant, onOpen }: SummaryCardProps) {
+function SummaryCard({ a, variant, terminalLines, onOpen }: SummaryCardProps) {
   const running = a.status === 'running';
   const failed = a.status === 'failed';
   const review = a.status === 'review-needed';
@@ -219,7 +242,7 @@ function SummaryCard({ a, variant, onOpen }: SummaryCardProps) {
             fontFamily: 'Geist Mono', fontSize: 10.5, lineHeight: 1.45,
             color: '#9aa0aa',
           }}>
-            {TERMINAL_LINES.slice(running ? 9 : failed ? 6 : 11, running ? 13 : failed ? 8 : 13).map((l, i) => (
+            {terminalLines.slice(running ? 9 : failed ? 6 : 11, running ? 13 : failed ? 8 : 13).map((l, i) => (
               <div key={i} style={{ display: 'flex', gap: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 <span style={{ color: '#525252', flexShrink: 0 }}>{l.t.slice(-5)}</span>
                 <span style={{ color: failed && i > 0 ? 'var(--danger)' : 'var(--accent)', flexShrink: 0 }}>[{l.tag}]</span>
@@ -289,9 +312,10 @@ type ModalTab = 'overview' | 'logs' | 'diff' | 'pr';
 
 interface AgentDetailModalProps {
   a: AgentRun;
+  terminalLines: TerminalLine[];
   onClose: () => void;
 }
-function AgentDetailModal({ a, onClose }: AgentDetailModalProps) {
+function AgentDetailModal({ a, terminalLines, onClose }: AgentDetailModalProps) {
   const overlays = useOverlays();
   const [tab, setTab] = useState<ModalTab>(
     a.status === 'failed' ? 'logs'
@@ -419,7 +443,7 @@ function AgentDetailModal({ a, onClose }: AgentDetailModalProps) {
             </div>
             <div style={{ flex: 1, overflow: 'auto', padding: 18 }}>
               {tab === 'overview' && <TabOverview a={a} />}
-              {tab === 'logs'     && <TabLogs a={a} />}
+              {tab === 'logs'     && <TabLogs a={a} terminalLines={terminalLines} />}
               {tab === 'diff'     && <TabDiff a={a} />}
               {tab === 'pr'       && <TabPR a={a} />}
             </div>
@@ -537,9 +561,9 @@ function TabOverview({ a }: TabProps) {
   );
 }
 
-function TabLogs({ a }: TabProps) {
+function TabLogs({ a, terminalLines }: TabProps & { terminalLines: TerminalLine[] }) {
   const failed = a.status === 'failed';
-  const lines = TERMINAL_LINES.slice(0, failed ? 12 : 13);
+  const lines = terminalLines.slice(0, failed ? 12 : 13);
   return (
     <div className="terminal" style={{ maxHeight: 'none', borderRadius: 6 }}>
       {lines.map((l, i) => (

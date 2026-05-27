@@ -4,14 +4,16 @@
 
 import { Fragment, useState } from 'react';
 import { Icons } from '../components/icons';
-import { Card, SectionHead, Badge, Tabs, Button, Spark, SourceChip } from '../components/ui';
+import { Card, SectionHead, Badge, Tabs, Button, Spark, SourceChip, SkeletonList, ErrorState, EmptyState } from '../components/ui';
 import { useOverlays } from '../components/overlays';
-import { SOURCES } from '../data/mock';
+import { useSources } from '../api/hooks/useSources';
 import type { SourceKind } from '../data/mock';
 
 export function SourcesPage() {
   const [tab, setTab] = useState('all');
   const overlays = useOverlays();
+  const { data, isLoading, isError, error, refetch } = useSources();
+  const SOURCES = data?.data ?? [];
   const filtered = SOURCES.filter(s => {
     if (tab === 'own') return s.own;
     if (tab === 'comp') return !s.own;
@@ -81,6 +83,19 @@ export function SourcesPage() {
         />
         <div className="l-grid">
           <Card className="col-8">
+            {isLoading && <SkeletonList rows={6} />}
+            {isError && (
+              <ErrorState message={error instanceof Error ? error.message : 'Failed to load sources.'} onRetry={() => refetch()} />
+            )}
+            {!isLoading && !isError && SOURCES.length === 0 && (
+              <EmptyState
+                title="No sources connected"
+                body="Connect an app store, community, or support channel to start ingesting reviews."
+                action={<Button size="sm" leftIcon={<Icons.Plus />} onClick={() => overlays.openAddSource()}>Add source</Button>}
+              />
+            )}
+            {!isLoading && !isError && SOURCES.length > 0 && (
+            <Fragment>
             <table className="table">
               <thead>
                 <tr>
@@ -131,6 +146,8 @@ export function SourcesPage() {
               <span style={{ flex: 1 }} />
               <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{filtered.length} of {SOURCES.length} shown</span>
             </div>
+            </Fragment>
+            )}
           </Card>
 
           <AddSourceCard className="col-4" />

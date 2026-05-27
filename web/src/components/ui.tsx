@@ -142,7 +142,16 @@ interface SwitchProps {
 }
 
 function Switch({ on, onChange }: SwitchProps) {
-  return <div className={`switch ${on ? 'on' : ''}`} onClick={() => onChange(!on)} />;
+  return (
+    <div
+      className={`switch ${on ? 'on' : ''}`}
+      role="switch"
+      aria-checked={on}
+      tabIndex={0}
+      onClick={() => onChange(!on)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onChange(!on); } }}
+    />
+  );
 }
 
 // ----- Sparkline -----------------------------------------------------------
@@ -318,8 +327,108 @@ function HeatRow({ values, max }: HeatRowProps) {
   );
 }
 
+// ----- Skeleton ------------------------------------------------------------
+// Shimmer placeholder block. Compose several to fake list/card layouts while a
+// query is loading. Styling (.skeleton + shimmer) lives in styles.css.
+interface SkeletonProps {
+  width?: number | string;
+  height?: number | string;
+  radius?: number | string;
+  style?: CSSProperties;
+}
+
+function Skeleton({ width = '100%', height = 14, radius = 'var(--radius)', style }: SkeletonProps) {
+  return (
+    <span
+      className="skeleton"
+      aria-hidden="true"
+      style={{ width, height, borderRadius: radius, ...style }}
+    />
+  );
+}
+
+// A few skeleton rows inside a card body — the common "loading a list" case.
+interface SkeletonListProps {
+  rows?: number;
+  className?: string;
+}
+
+function SkeletonList({ rows = 5, className }: SkeletonListProps) {
+  return (
+    <div className={`list ${className || ''}`} aria-busy="true">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div className="list-row top" key={i} style={{ padding: '12px 16px', gap: 12 }}>
+          <Skeleton width={28} height={28} radius="50%" />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <Skeleton width={`${70 - (i % 3) * 12}%`} height={12} />
+            <Skeleton width={`${45 - (i % 2) * 10}%`} height={10} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ----- Empty / Error states ------------------------------------------------
+interface StatePanelProps {
+  icon?: ReactNode;
+  title: ReactNode;
+  body?: ReactNode;
+  action?: ReactNode;
+  tone?: 'muted' | 'danger';
+}
+
+function StatePanel({ icon, title, body, action, tone = 'muted' }: StatePanelProps) {
+  const color = tone === 'danger' ? 'var(--danger)' : 'var(--fg-subtle)';
+  return (
+    <div
+      style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center',
+        gap: 8, padding: '40px 24px', color: 'var(--fg-muted)',
+      }}
+    >
+      {icon && <div style={{ color, width: 22, height: 22 }}>{icon}</div>}
+      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg-strong)' }}>{title}</div>
+      {body && <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5, maxWidth: 340 }}>{body}</div>}
+      {action && <div style={{ marginTop: 6 }}>{action}</div>}
+    </div>
+  );
+}
+
+interface EmptyStateProps {
+  title?: ReactNode;
+  body?: ReactNode;
+  action?: ReactNode;
+  icon?: ReactNode;
+}
+
+function EmptyState({ title = 'Nothing here yet', body, action, icon }: EmptyStateProps) {
+  return <StatePanel icon={icon ?? <Icons.Inbox />} title={title} body={body} action={action} />;
+}
+
+interface ErrorStateProps {
+  title?: ReactNode;
+  message?: ReactNode;
+  onRetry?: () => void;
+}
+
+function ErrorState({ title = 'Couldn’t load data', message, onRetry }: ErrorStateProps) {
+  return (
+    <StatePanel
+      tone="danger"
+      icon={<Icons.AlertTri />}
+      title={title}
+      body={message}
+      action={onRetry && (
+        <Button size="sm" variant="ghost" leftIcon={<Icons.Refresh />} onClick={onRetry}>Retry</Button>
+      )}
+    />
+  );
+}
+
 export {
   Button, Badge, Card, SectionHead, Tabs, Switch, Spark, SparkBars, SourceChip, PriDot,
   ToastProvider, useToast, HeatRow, SRC_META,
+  Skeleton, SkeletonList, EmptyState, ErrorState,
 };
 export type { Toast };

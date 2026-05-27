@@ -1,228 +1,277 @@
 // ============================================================
-// Processing — Bigstep-style hierarchical graph + side panel
+// Processing — repo code-map + review-signal heatmap (ReactFlow)
 // ============================================================
-// Maps repo modules / features against review clusters.
-// Variants (tweak): tree | radial | force
+// Real graph engine (@xyflow/react v12) with dagre auto-layout.
+// Nodes/edges are derived from mock MODULES; backend /api/graph
+// already returns ReactFlow-shaped data for the eventual swap.
+//   - dagre lays out the module→feature containment tree (TB)
+//   - gap/orphan clusters float in a dedicated right-side zone
+//   - heat (reviews/7d) drives node color + minimap
+//   - selecting a node highlights its neighbourhood and opens the panel
 
-import { Fragment, useState, useMemo } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
+import {
+  ReactFlow,
+  ReactFlowProvider,
+  Background,
+  BackgroundVariant,
+  Controls,
+  MiniMap,
+  Handle,
+  Position,
+  useNodesState,
+  useEdgesState,
+} from '@xyflow/react';
+import type { Node, Edge, NodeProps } from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+
+import dagre from '@dagrejs/dagre';
 import { Icons } from '../components/icons';
-import { Card, Badge, Button, SourceChip } from '../components/ui';
+import { Card, Badge, Button, SourceChip, ErrorState } from '../components/ui';
 import { useOverlays } from '../components/overlays';
-import { MODULES, REVIEWS } from '../data/mock';
-import type { RepoModule } from '../data/mock';
+import { useGraph } from '../api/hooks/useGraph';
+import { useAppStore } from '../store';
+import type { RepoModule, GraphReview } from '../data/mock';
 
-const GRAPH_W = 1180;
-const GRAPH_H = 640;
-
-// Module ordering for layout
-const MOD_ORDER = ['transcribe', 'summary', 'integrations', 'mobile', 'collab', 'auth'];
-const ORPHAN_ORDER = ['orphan_teams', 'orphan_offline', 'orphan_widget'];
-
-// A laid-out node rectangle. `angle` is only set by the radial layout.
-interface NodePos {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  angle?: number;
+type NodeKind = 'repo' | 'module' | 'feature' | 'gap';
+interface GraphNodeData extends Record<string, unknown> {
+  label: string;
+  kind: NodeKind;
+  heat: number;
+  heatPct: number;
+  branchTag?: string;
+  isOrphan: boolean;
+  active: boolean;
+  dim: boolean;
 }
-type Positions = Record<string, NodePos>;
+type GNode = Node<GraphNodeData>;
 
-// ----- Layout: TREE --------------------------------------------------------
-function computeTreeLayout(): Positions {
-  const positions: Positions = {};
-  const featW = 116;
-  const featH = 36;
-  const modW = 140;
-  const modH = 52;
-  const rootW = 168;
-  const rootH = 52;
+const SIZE: Record<NodeKind, { w: number; h: number }> = {
+  repo:    { w: 184, h: 56 },
+  module:  { w: 158, h: 60 },
+  feature: { w: 150, h: 44 },
+  gap:     { w: 170, h: 58 },
+};
 
-  // root
-  positions['root'] = { x: GRAPH_W / 2 - rootW / 2, y: 18, w: rootW, h: rootH };
+// ----- Build graph (dagre tree + floating gap zone) ------------------------
+function buildGraph(modules: RepoModule[]): { nodes: GNode[]; edges: Edge[] } {
+  // Heat normalization — root is an outlier (whole-repo total), so the color
+  // scale is anchored to the hottest non-root node, derived from the data.
+  const MAX_HEAT = Math.max(1, ...modules.filter((m) => m.id !== 'root').map((m) => m.heat));
+  const tree = modules.filter((m) => !m.isOrphan);
 
-  // modules — 6 in a row centered
-  const modGap = 20;
-  const totalModW = MOD_ORDER.length * modW + (MOD_ORDER.length - 1) * modGap;
-  // reserve right lane for orphans (~ 160px including divider)
-  const orphanLaneW = 160;
-  const available = GRAPH_W - orphanLaneW - 40;
-  const startX = 20 + Math.max(0, (available - totalModW) / 2);
-  MOD_ORDER.forEach((id, i) => {
-    positions[id] = {
-      x: startX + i * (modW + modGap),
-      y: 118,
-      w: modW, h: modH,
-    };
+  const kindOf = (id: string, kind: string): NodeKind =>
+    id === 'root' ? 'repo' : kind === 'module' ? 'module' : 'feature';
+
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: 'TB', nodesep: 22, ranksep: 64, marginx: 24, marginy: 24 });
+
+  tree.forEach((m) => {
+    const s = SIZE[kindOf(m.id, m.kind)];
+    g.setNode(m.id, { width: s.w, height: s.h });
+  });
+  const containment = tree.filter((m) => m.parent).map((m) => ({ source: m.parent as string, target: m.id }));
+  containment.forEach((e) => g.setEdge(e.source, e.target));
+  dagre.layout(g);
+
+  let maxX = 0;
+  let minY = Infinity;
+  const placed = tree.map((m) => {
+    const kind = kindOf(m.id, m.kind);
+    const s = SIZE[kind];
+    const p = g.node(m.id);
+    const x = p.x - s.w / 2;
+    const y = p.y - s.h / 2;
+    maxX = Math.max(maxX, x + s.w);
+    minY = Math.min(minY, y);
+    return { m, kind, x, y };
   });
 
-  // features under each module, stacked vertically
-  MOD_ORDER.forEach((modId) => {
-    const feats = MODULES.filter((m) => m.parent === modId);
-    feats.forEach((f, i) => {
-      const mp = positions[modId];
-      positions[f.id] = {
-        x: mp.x + (modW - featW) / 2,
-        y: 220 + i * (featH + 10),
-        w: featW, h: featH,
-      };
-    });
-  });
+  // Gap/orphan clusters — fixed lane to the right of the laid-out tree.
+  const gapX = maxX + 96;
+  const gapY0 = (minY === Infinity ? 24 : minY) + 40;
+  const gaps = modules.filter((m) => m.isOrphan).map((m, i) => ({
+    m, kind: 'gap' as NodeKind, x: gapX, y: gapY0 + i * 100,
+  }));
 
-  // orphans — right lane
-  const orphanX = GRAPH_W - orphanLaneW + 16;
-  ORPHAN_ORDER.forEach((id, i) => {
-    positions[id] = {
-      x: orphanX,
-      y: 118 + i * 90,
-      w: 140, h: 52,
-    };
-  });
+  const nodes: GNode[] = [...placed, ...gaps].map(({ m, kind, x, y }) => ({
+    id: m.id,
+    type: kind,
+    position: { x, y },
+    // Explicit dimensions let ReactFlow skip measurement and keep
+    // onlyRenderVisibleElements culling accurate.
+    width: SIZE[kind].w,
+    height: SIZE[kind].h,
+    data: {
+      label: m.label,
+      kind: m.kind as NodeKind,
+      heat: m.heat,
+      heatPct: Math.min(1, m.heat / MAX_HEAT),
+      branchTag: m.branchTag,
+      isOrphan: !!m.isOrphan,
+      active: false,
+      dim: false,
+    },
+    style: { width: SIZE[kind].w, height: SIZE[kind].h },
+  }));
 
-  return positions;
+  const edges: Edge[] = containment.map((e) => ({
+    id: `e-${e.source}-${e.target}`,
+    source: e.source,
+    target: e.target,
+    type: 'smoothstep',
+    style: { stroke: 'var(--border-strong)', strokeWidth: 1.4 },
+  }));
+
+  return { nodes, edges };
 }
 
-// ----- Layout: RADIAL ------------------------------------------------------
-function computeRadialLayout(): Positions {
-  const positions: Positions = {};
-  const cx = GRAPH_W / 2 - 100;
-  const cy = GRAPH_H / 2 - 30;
-
-  const featW = 110, featH = 32, modW = 134, modH = 48, rootW = 160, rootH = 48;
-  positions['root'] = { x: cx - rootW / 2, y: cy - rootH / 2, w: rootW, h: rootH };
-
-  // modules in inner ring
-  const modR = 180;
-  MOD_ORDER.forEach((id, i) => {
-    const angle = (i / MOD_ORDER.length) * Math.PI * 2 - Math.PI / 2;
-    positions[id] = {
-      x: cx + Math.cos(angle) * modR - modW / 2,
-      y: cy + Math.sin(angle) * modR - modH / 2,
-      w: modW, h: modH, angle,
-    };
-  });
-
-  // features in outer ring, grouped around their module's angle
-  MOD_ORDER.forEach((modId) => {
-    const mp = positions[modId];
-    const feats = MODULES.filter((m) => m.parent === modId);
-    const baseAngle = mp.angle ?? 0;
-    const spread = Math.PI / 6;
-    feats.forEach((f, i) => {
-      const offset = feats.length === 1 ? 0 : -spread / 2 + (i / (feats.length - 1)) * spread;
-      const a = baseAngle + offset;
-      const outerR = 310;
-      positions[f.id] = {
-        x: cx + Math.cos(a) * outerR - featW / 2,
-        y: cy + Math.sin(a) * outerR - featH / 2,
-        w: featW, h: featH,
-      };
-    });
-  });
-
-  // orphans at far right
-  ORPHAN_ORDER.forEach((id, i) => {
-    positions[id] = {
-      x: GRAPH_W - 160,
-      y: 30 + i * 70,
-      w: 140, h: 50,
-    };
-  });
-
-  return positions;
+// ----- Custom node components ----------------------------------------------
+function NodeShell({ data, kind }: { data: GraphNodeData; kind: NodeKind }) {
+  const Icon = kind === 'repo' ? Icons.Database : kind === 'gap' ? Icons.AlertTri : kind === 'module' ? Icons.Folder : Icons.Code;
+  const cls = ['rf-node', kind, data.active ? 'active' : '', data.dim ? 'dim' : ''].filter(Boolean).join(' ');
+  const showMeter = kind === 'module' || kind === 'repo';
+  return (
+    <div className={cls}>
+      <Handle type="target" position={Position.Top} className="rf-handle" />
+      <div className="rf-node-head">
+        <Icon />
+        <span className="rf-node-name mono">{data.label}</span>
+        {kind === 'gap'
+          ? <span className="rf-heat-badge">{data.heat}</span>
+          : kind !== 'feature' && <span className="rf-heat-badge">{data.heat}</span>}
+      </div>
+      {kind === 'repo' && <div className="rf-node-sub mono">classified · {data.branchTag || 'main'}</div>}
+      {kind === 'gap' && <div className="rf-node-sub mono">unmapped cluster</div>}
+      {showMeter && (
+        <div className="rf-heat-meter"><div style={{ width: `${data.heatPct * 100}%` }} /></div>
+      )}
+      {kind === 'feature' && (
+        <div className="rf-feat-bar" style={{ background: `linear-gradient(90deg, var(--accent) ${data.heatPct * 100}%, var(--surface-2) ${data.heatPct * 100}%)` }} />
+      )}
+      <Handle type="source" position={Position.Bottom} className="rf-handle" />
+    </div>
+  );
 }
+const RepoNode = ({ data }: NodeProps<GNode>) => <NodeShell data={data} kind="repo" />;
+const ModuleNode = ({ data }: NodeProps<GNode>) => <NodeShell data={data} kind="module" />;
+const FeatureNode = ({ data }: NodeProps<GNode>) => <NodeShell data={data} kind="feature" />;
+const GapNode = ({ data }: NodeProps<GNode>) => <NodeShell data={data} kind="gap" />;
 
-// ----- Layout: FORCE (pre-computed pseudo-force) ---------------------------
-function computeForceLayout(): Positions {
-  // Hand-tuned "force-directed-looking" positions
-  const positions: Positions = {
-    root:         { x: 540, y: 290, w: 160, h: 50 },
-
-    transcribe:   { x: 230, y: 110, w: 140, h: 48 },
-    summary:      { x: 770, y: 110, w: 140, h: 48 },
-    integrations: { x: 870, y: 320, w: 140, h: 48 },
-    mobile:       { x: 770, y: 490, w: 140, h: 48 },
-    collab:       { x: 230, y: 490, w: 140, h: 48 },
-    auth:         { x: 120, y: 300, w: 140, h: 48 },
-
-    t_ko:    { x: 30,  y: 30,  w: 112, h: 34 },
-    t_en:    { x: 170, y: 30,  w: 112, h: 34 },
-    t_dia:   { x: 310, y: 30,  w: 122, h: 34 },
-    t_noise: { x: 80,  y: 200, w: 122, h: 34 },
-
-    s_bullets:   { x: 690, y: 30, w: 122, h: 34 },
-    s_actions:   { x: 820, y: 30, w: 122, h: 34 },
-    s_decisions: { x: 950, y: 30, w: 122, h: 34 },
-    s_translate: { x: 970, y: 230, w: 122, h: 34 },
-
-    i_slack:  { x: 1030, y: 250, w: 100, h: 34 },
-    i_notion: { x: 1030, y: 360, w: 100, h: 34 },
-    i_linear: { x: 1030, y: 420, w: 100, h: 34 },
-    i_gcal:   { x: 950,  y: 480, w: 130, h: 34 },
-
-    m_ios:     { x: 760, y: 570, w: 100, h: 34 },
-    m_android: { x: 870, y: 570, w: 110, h: 34 },
-    m_ipad:    { x: 700, y: 540, w: 90,  h: 32 },
-
-    c_share:   { x: 200, y: 570, w: 100, h: 34 },
-    c_comment: { x: 80,  y: 540, w: 110, h: 32 },
-
-    a_sso: { x: 30, y: 300, w: 80, h: 32 },
-
-    orphan_teams:   { x: 480, y: 30,  w: 156, h: 52 },
-    orphan_offline: { x: 480, y: 565, w: 156, h: 52 },
-    orphan_widget:  { x: 380, y: 295, w: 130, h: 48 },
-  };
-  return positions;
-}
-
-// ----- Edge path (smooth cubic bezier) -------------------------------------
-function edgePath(a: NodePos, b: NodePos): string {
-  const x1 = a.x + a.w / 2;
-  const y1 = a.y + a.h;
-  const x2 = b.x + b.w / 2;
-  const y2 = b.y;
-  const dy = (y2 - y1);
-  return `M${x1},${y1} C${x1},${y1 + dy * 0.5} ${x2},${y2 - dy * 0.5} ${x2},${y2}`;
-}
-
-function edgePathAny(a: NodePos, b: NodePos): string {
-  const x1 = a.x + a.w / 2;
-  const y1 = a.y + a.h / 2;
-  const x2 = b.x + b.w / 2;
-  const y2 = b.y + b.h / 2;
-  const mx = (x1 + x2) / 2;
-  const my = (y1 + y2) / 2;
-  return `M${x1},${y1} Q${mx},${my} ${x2},${y2}`;
-}
-
-interface Edge {
-  from: string;
-  to: string;
-  dashed: boolean;
-}
+const minimapColor = (n: GNode): string =>
+  n.data.isOrphan
+    ? '#d59b4a'
+    : `rgba(236, 90, 68, ${0.22 + (n.data.heatPct || 0) * 0.6})`;
 
 // ----- Page ----------------------------------------------------------------
-export function ProcessingPage({ graphStyle }: { graphStyle: 'tree' | 'radial' | 'force' }) {
-  const [selected, setSelected] = useState<string | null>('t_ko');
-  const [showRaw] = useState(false);
+// Outer wraps the graph in a ReactFlowProvider so the hooks below (and any
+// future useReactFlow) have the internal store available. colorMode follows
+// the app theme passed from the shell.
+interface ProcessingPageProps {
+  colorMode?: 'dark' | 'light';
+  /** Deep-link node id from the URL (?node=...). Pre-selects a graph node. */
+  selectedNode?: string;
+  /** Reflect the in-graph selection back to the URL / caller. */
+  onSelectNode?: (id: string | null) => void;
+}
+
+export function ProcessingPage({ colorMode = 'dark', selectedNode, onSelectNode }: ProcessingPageProps) {
+  const { data, isLoading, isError, error, refetch } = useGraph();
+
+  if (isLoading) {
+    return (
+      <div className="graph-frame" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="mono" style={{ color: 'var(--fg-subtle)', fontSize: 13 }}>Loading graph…</div>
+      </div>
+    );
+  }
+  if (isError || !data) {
+    return (
+      <Card>
+        <ErrorState message={error instanceof Error ? error.message : 'Failed to load the processing graph.'} onRetry={() => refetch()} />
+      </Card>
+    );
+  }
+
+  return (
+    <ReactFlowProvider>
+      <ProcessingGraph
+        colorMode={colorMode}
+        modules={data.data.modules}
+        reviews={data.data.reviews}
+        deepLinkNode={selectedNode}
+        onSelectNode={onSelectNode}
+      />
+    </ReactFlowProvider>
+  );
+}
+
+function ProcessingGraph({ colorMode, modules, reviews: reviewsMap, deepLinkNode, onSelectNode }: {
+  colorMode: 'dark' | 'light';
+  modules: RepoModule[];
+  reviews: Record<string, GraphReview[]>;
+  deepLinkNode?: string;
+  onSelectNode?: (id: string | null) => void;
+}) {
   const overlays = useOverlays();
+  // The selection is URL-driven when a ?node= deep link is present; otherwise
+  // it falls back to the default focus node. `setSelect` updates both local
+  // state, the URL (via onSelectNode), and the shared store node selection.
+  const storeSelectNode = useAppStore((s) => s.selectNode);
+  const [selected, setSelectedRaw] = useState<string | null>(deepLinkNode ?? 't_ko');
 
-  const positions = useMemo<Positions>(() => {
-    if (graphStyle === 'radial') return computeRadialLayout();
-    if (graphStyle === 'force')  return computeForceLayout();
-    return computeTreeLayout();
-  }, [graphStyle]);
+  const setSelect = (id: string | null) => {
+    setSelectedRaw(id);
+    storeSelectNode(id);
+    onSelectNode?.(id);
+  };
 
-  // Build edges from parent relations
-  const edges = useMemo<Edge[]>(() => {
-    return MODULES
-      .filter((m) => m.parent && positions[m.id] && positions[m.parent])
-      .map((m) => ({ from: m.parent as string, to: m.id, dashed: false }));
-  }, [positions]);
+  // Keep local selection in sync if the URL ?node= changes (back/forward, or a
+  // shared deep link). Only react to defined deep-link values.
+  useEffect(() => {
+    if (deepLinkNode !== undefined && deepLinkNode !== selected) {
+      setSelectedRaw(deepLinkNode);
+      storeSelectNode(deepLinkNode);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkNode]);
 
-  const selectedNode = MODULES.find((m) => m.id === selected);
-  const reviews = (selected ? REVIEWS[selected] : undefined) || [];
+  const nodeTypes = useMemo(() => ({ repo: RepoNode, module: ModuleNode, feature: FeatureNode, gap: GapNode }), []);
+  const base = useMemo(() => buildGraph(modules), [modules]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<GNode>(base.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(base.edges);
+
+  // Selection → neighbourhood highlight + dim the rest + light up touching edges.
+  useEffect(() => {
+    const sel = selected;
+    const nb = new Set<string>();
+    if (sel) {
+      nb.add(sel);
+      modules.forEach((m) => { if (m.parent === sel) nb.add(m.id); });
+      const node = modules.find((m) => m.id === sel);
+      if (node?.parent) nb.add(node.parent);
+    }
+    setNodes((nds) => nds.map((n) => ({
+      ...n,
+      data: { ...n.data, active: sel === n.id, dim: sel ? !nb.has(n.id) : false },
+    })));
+    setEdges((eds) => eds.map((e) => {
+      const active = !!sel && (e.source === sel || e.target === sel);
+      return {
+        ...e,
+        animated: active,
+        style: {
+          stroke: active ? 'var(--accent)' : 'var(--border-strong)',
+          strokeWidth: active ? 2 : 1.4,
+          opacity: sel ? (active ? 1 : 0.3) : 1,
+        },
+      };
+    }));
+  }, [selected, setNodes, setEdges, modules]);
+
+  const selectedNode = modules.find((m) => m.id === selected);
+  const reviews = (selected ? reviewsMap[selected] : undefined) || [];
 
   return (
     <Fragment>
@@ -241,97 +290,36 @@ export function ProcessingPage({ graphStyle }: { graphStyle: 'tree' | 'radial' |
             )}
           </div>
         </div>
-        <Button size="sm" variant="ghost" leftIcon={<Icons.Filter />}>Filter</Button>
         <Button size="sm" variant="ghost" leftIcon={<Icons.Refresh />} onClick={() => overlays.confirm({
           title: 'Re-cluster all reviews?',
           body: 'Re-embeds all 1,247,318 vectors and rebuilds clusters with k=148. Takes ~2 min. The graph will be partially blank during the run.',
           confirmLabel: 'Re-cluster',
           onConfirm: () => overlays.toast({ title: 'Re-clustering started', body: 'voyage-3 · eta ~2 min · graph will refresh', icon: <Icons.Refresh /> }),
         })}>Re-cluster</Button>
-        <Button size="sm" leftIcon={<Icons.Database />} onClick={() => overlays.navigate('reviews')}>{showRaw ? 'Hide raw' : 'Raw reviews'}</Button>
+        <Button size="sm" leftIcon={<Icons.Database />} onClick={() => overlays.navigate('reviews')}>Raw reviews</Button>
       </div>
 
       <div className="graph-frame">
-        <div className="graph-canvas">
-          {/* SVG layer for edges */}
-          <svg width={GRAPH_W} height={GRAPH_H} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-            <defs>
-              <marker id="arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                <path d="M0,0 L10,5 L0,10 z" fill="var(--border-strong)" />
-              </marker>
-            </defs>
-            {edges.map((e, i) => {
-              const a = positions[e.from];
-              const b = positions[e.to];
-              const isActiveChain = (selected === e.from || selected === e.to);
-              const dPath = graphStyle === 'force' ? edgePathAny(a, b) : edgePath(a, b);
-              return (
-                <path
-                  key={i}
-                  d={dPath}
-                  fill="none"
-                  stroke={isActiveChain ? 'var(--accent)' : 'var(--border-strong)'}
-                  strokeWidth={isActiveChain ? 1.6 : 1.2}
-                  strokeDasharray={e.dashed ? '4 4' : '0'}
-                  opacity={isActiveChain ? 1 : 0.85}
-                />
-              );
-            })}
-            {/* Orphan dashed lines to a virtual "incoming" point */}
-            {ORPHAN_ORDER.map((id) => {
-              const p = positions[id];
-              if (!p) return null;
-              const x1 = p.x;
-              const y1 = p.y + p.h / 2;
-              return (
-                <path
-                  key={id}
-                  d={`M${x1 - 24},${y1} L${x1},${y1}`}
-                  stroke="var(--warn)"
-                  strokeWidth="1.2"
-                  strokeDasharray="3 3"
-                  fill="none"
-                  opacity="0.6"
-                />
-              );
-            })}
-            {/* Vertical separator before orphan lane (tree only) */}
-            {graphStyle === 'tree' && (
-              <line
-                x1={GRAPH_W - 180}
-                y1={90}
-                x2={GRAPH_W - 180}
-                y2={GRAPH_H - 30}
-                stroke="var(--border)"
-                strokeDasharray="4 6"
-                strokeWidth="1"
-              />
-            )}
-          </svg>
-
-          {/* Tree-only header labels */}
-          {graphStyle === 'tree' && (
-            <Fragment>
-              <div className="t-caps" style={{ position: 'absolute', left: 30, top: 90 }}>Repo modules</div>
-              <div className="t-caps" style={{ position: 'absolute', right: 30, top: 90, color: 'var(--warn)' }}>Unmapped clusters · 3</div>
-            </Fragment>
-          )}
-
-          {/* Nodes */}
-          {MODULES.map((m) => {
-            const p = positions[m.id];
-            if (!p) return null;
-            return (
-              <GraphNode
-                key={m.id}
-                m={m}
-                p={p}
-                selected={selected === m.id}
-                onClick={() => setSelected(m.id)}
-              />
-            );
-          })}
-        </div>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          nodeTypes={nodeTypes}
+          onNodeClick={(_, n) => setSelect(n.id)}
+          onPaneClick={() => setSelect(null)}
+          fitView
+          fitViewOptions={{ padding: 0.25 }}
+          minZoom={0.3}
+          maxZoom={2.2}
+          nodesConnectable={false}
+          onlyRenderVisibleElements
+          colorMode={colorMode}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--border-strong)" />
+          <Controls position="top-left" showInteractive={false} />
+          <MiniMap position="bottom-left" pannable zoomable nodeColor={minimapColor} maskColor="rgba(0,0,0,0.4)" />
+        </ReactFlow>
 
         {/* Side panel */}
         {selectedNode && (
@@ -355,7 +343,7 @@ export function ProcessingPage({ graphStyle }: { graphStyle: 'tree' | 'radial' |
                   </div>
                 )}
               </div>
-              <Button variant="ghost" className="icon-only" onClick={() => setSelected(null)}><Icons.X /></Button>
+              <Button variant="ghost" className="icon-only" onClick={() => setSelect(null)}><Icons.X /></Button>
             </div>
             <div className="graph-side-body">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -386,7 +374,7 @@ export function ProcessingPage({ graphStyle }: { graphStyle: 'tree' | 'radial' |
                 </div>
               ))}
               {selectedNode.isOrphan && (
-                <div style={{ marginTop: 16, padding: 12, background: 'var(--warn-soft)', borderRadius: 6, border: '1px solid var(--warn)', borderStyle: 'dashed' }}>
+                <div style={{ marginTop: 16, padding: 12, background: 'var(--warn-soft)', borderRadius: 6, border: '1px dashed var(--warn)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                     <Icons.Sparkles />
                     <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--warn)' }}>Proposal generated</span>
@@ -436,69 +424,5 @@ export function ProcessingPage({ graphStyle }: { graphStyle: 'tree' | 'radial' |
         </Card>
       </div>
     </Fragment>
-  );
-}
-
-// ----- Node ----------------------------------------------------------------
-interface GraphNodeProps {
-  m: RepoModule;
-  p: NodePos;
-  selected: boolean;
-  onClick: () => void;
-}
-function GraphNode({ m, p, selected, onClick }: GraphNodeProps) {
-  const max = 312;
-  const heatPct = Math.min(1, m.heat / max);
-  const isHot = heatPct > 0.5;
-  const isCold = m.heat < 25;
-
-  const cls = [
-    'node',
-    m.kind === 'feature' ? 'node-feat' : '',
-    m.kind === 'module'  ? 'node-module' : '',
-    m.id === 'root'      ? 'node-root' : '',
-    m.isOrphan           ? 'node-orphan' : '',
-    selected             ? 'selected' : '',
-  ].filter(Boolean).join(' ');
-
-  return (
-    <div
-      className={cls}
-      style={{
-        left: p.x, top: p.y,
-        width: p.w, minWidth: p.w,
-        padding: m.kind === 'feature' ? '5px 8px' : '8px 10px',
-      }}
-      onClick={onClick}
-    >
-      <div className="node-head">
-        {m.id === 'root' ? (
-          <Icons.Database />
-        ) : m.isOrphan ? (
-          <Icons.AlertTri />
-        ) : m.kind === 'module' ? (
-          <Icons.Folder />
-        ) : (
-          <Icons.Code />
-        )}
-        <span className="node-name mono">{m.label}</span>
-      </div>
-      {m.kind !== 'feature' && (
-        <div className="node-meta">
-          <span>{m.heat}</span>
-          <span className="dot-divider">·</span>
-          <span>{m.isOrphan ? 'unmapped' : m.branchTag || 'feature'}</span>
-        </div>
-      )}
-      {m.kind !== 'feature' && (
-        <div className={`node-heat ${isHot ? '' : isCold ? 'cold' : ''}`}>
-          {m.heat}
-        </div>
-      )}
-      {/* Heat bar at bottom for features */}
-      {m.kind === 'feature' && (
-        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 2, background: `linear-gradient(90deg, var(--accent) ${heatPct * 100}%, var(--surface-2) ${heatPct * 100}%)` }} />
-      )}
-    </div>
   );
 }

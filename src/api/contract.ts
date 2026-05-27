@@ -22,12 +22,23 @@ export interface Category { name: string; count: number; share: number; trend: '
 export interface ActivityItem { kind: string; at: string; text: string; link: string; }
 export interface DashboardData { pipeline: PipelineStage[]; categories: Category[]; activity: ActivityItem[]; }
 
+// `status` standardized on 'error' (web mock previously used 'err'; both sides now agree on 'error').
 export interface Source { id: string; kind: string; product: string; name: string; region: string; rate: number; lastSync: string; status: 'ok' | 'warn' | 'error'; own: boolean; }
 
 export interface RawReviewRow { id: string; src: string; sentiment: string; rating: number | null; lang: string; text: string; category: string; severity?: string; feature?: string | null; fstate?: string | null; date: string; }
 
 // Processing graph — React Flow nodes/edges (matches the existing ui-server.ts buildGraph output).
-export interface GraphNode { id: string; position: { x: number; y: number }; data: { label: string }; style?: Record<string, unknown>; }
+// Node kinds, canonical across UI + backend. 'gap' is an unmapped review cluster
+// (the web mock historically called these 'orphan'); both sides now use 'gap'.
+export type GraphNodeKind = 'repo' | 'module' | 'feature' | 'gap';
+// Node `data` carries the fields the frontend needs to theme/lay out a node.
+// IMPORTANT: no hex colors here — the UI derives all color from `heat`/`kind` via CSS
+// variables (Editorial Dark theme). The backend only supplies semantic data.
+export interface GraphNodeData { label: string; kind: GraphNodeKind; heat: number; isOrphan: boolean; }
+// Node IDs are PLAIN IDs (e.g. 't_ko', 'orphan_teams', 'root') — NOT 'f:'/'g:' prefixed.
+// The UI does side-panel and Reviews lookups by these raw IDs, so they are the canonical
+// key. Feature vs gap is disambiguated by `data.kind`, not by an ID prefix.
+export interface GraphNode { id: string; position: { x: number; y: number }; data: GraphNodeData; style?: Record<string, unknown>; }
 export interface GraphEdge { id: string; source: string; target: string; style?: Record<string, unknown>; }
 export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; }
 
@@ -37,7 +48,22 @@ export interface ProposalCard {
 }
 
 export interface AgentRun { id: string; proposal: string; title: string; branch: string; status: string; progress: number; }
-export interface AuditEvent { id: string; at: string; actor: string; action: string; detail: string; }
+
+// Audit/activity event — aligned to the richer web mock shape (web/src/data/mock-extras.ts).
+// The earlier {at, action} pair was too thin for the Activity timeline UI (day grouping,
+// actor avatars, tone-colored rows, expandable detail), so the mock shape wins.
+export interface AuditEvent {
+  id: string;
+  t: string;            // time-of-day, e.g. '14:38:24'
+  day: string;          // bucket label, e.g. 'Today' | 'Yesterday'
+  actor: string;
+  actorKind: 'agent' | 'human' | 'system';
+  type: string;
+  title: string;
+  target: string;
+  detail: string;
+  tone: 'accent' | 'good' | 'info' | 'purple' | 'danger' | 'warn';
+}
 
 // --- Route table (single source of truth) ---
 // status: 'live'    = backend table exists, can serve real data

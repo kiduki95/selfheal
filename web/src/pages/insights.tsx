@@ -2,12 +2,14 @@
 // Insights & Proposals — Kanban with detail panel
 // ============================================================
 
-import { Fragment, useState } from 'react';
+import { Fragment, useState, useEffect } from 'react';
 import type { ReactNode, ChangeEvent } from 'react';
 import { Icons } from '../components/icons';
-import { Card, SectionHead, Badge, Button, Spark, PriDot, SourceChip, SRC_META, useToast } from '../components/ui';
+import { Card, SectionHead, Badge, Button, Spark, PriDot, SourceChip, SRC_META, useToast, SkeletonList, ErrorState } from '../components/ui';
 import { useOverlays } from '../components/overlays';
-import { PROPOSALS, type Proposal } from '../data/mock';
+import { useProposals } from '../api/hooks/useProposals';
+import { useAppStore, canApprove as canApproveSelector } from '../store';
+import { type Proposal } from '../data/mock';
 
 type ColumnKey = Proposal['column'];
 
@@ -18,14 +20,26 @@ interface KanbanCol {
   count: number;
 }
 
-export function InsightsPage() {
-  const [proposals, setProposals] = useState<Proposal[]>(PROPOSALS);
-  const [selected, setSelected] = useState<string>('P-241');
+export function InsightsPage({ initialProposalId }: { initialProposalId?: string } = {}) {
+  const { data, isLoading, isError, error, refetch } = useProposals();
+  // Proposals are held in local state so approve/reject mutations are reflected
+  // optimistically; seed it from the query once data arrives.
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  // A ?proposal= deep link opens that card; otherwise default to P-241.
+  const [selected, setSelected] = useState<string>(initialProposalId ?? 'P-241');
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectCategory, setRejectCategory] = useState('out-of-scope');
   const toast = useToast();
   const overlays = useOverlays();
+  // RBAC: approving/rejecting proposals is reviewer/admin only. Client gating
+  // is UX-only — the server re-checks role on the approve/reject route
+  // (docs/web-architecture.md §4.1).
+  const canApprove = useAppStore(canApproveSelector);
+
+  useEffect(() => {
+    if (data?.data) setProposals(data.data);
+  }, [data]);
 
   const cur = proposals.find(p => p.id === selected);
 
@@ -106,6 +120,25 @@ export function InsightsPage() {
       {/* Layout: kanban + detail */}
       <section className="section">
         <SectionHead eyebrow="Proposals" title="Review queue" />
+        {isError && (
+          <Card>
+            <ErrorState message={error instanceof Error ? error.message : 'Failed to load proposals.'} onRetry={() => refetch()} />
+          </Card>
+        )}
+        {!isError && isLoading && (
+          <div className="kanban">
+            {cols.map(col => (
+              <div className="kanban-col" key={col.key}>
+                <div className="kanban-head">
+                  <span style={{ width: 6, height: 6, borderRadius: 50, background: `var(--${col.tone})` }} />
+                  <span className="ttl">{col.label}</span>
+                </div>
+                <div className="kanban-body"><SkeletonList rows={2} /></div>
+              </div>
+            ))}
+          </div>
+        )}
+        {!isError && !isLoading && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: 'var(--gutter)', alignItems: 'flex-start' }}>
         <div className="kanban">
           {cols.map(col => (
@@ -121,6 +154,7 @@ export function InsightsPage() {
                   <ProposalCard
                     key={p.id} p={p}
                     selected={selected === p.id}
+                    canApprove={canApprove}
                     onClick={() => setSelected(p.id)}
                     onApprove={() => approve(p.id)}
                     onReject={() => setRejectingId(p.id)}
@@ -139,15 +173,17 @@ export function InsightsPage() {
         {cur && (
           <DetailPanel
             p={cur}
+            canApprove={canApprove}
             onApprove={() => approve(cur.id)}
             onReject={() => setRejectingId(cur.id)}
             onSendToDev={() => sendToDev(cur.id)}
             onOpenSlack={() => overlays.openSlack(cur.id)}
             onOpenGithub={() => toast({ title: 'Opening GitHub issue', body: `${cur.id} → loop/loop-app#1849`, icon: <Icons.Github /> })}
-            onViewAgent={(agentId) => { window.dispatchEvent(new CustomEvent('selfheal:nav-agent', { detail: agentId })); overlays.navigate('agent'); }}
+            onViewAgent={() => overlays.navigate('agent')}
           />
         )}
         </div>
+        )}
       </section>
 
       {/* Reject modal */}
@@ -168,12 +204,14 @@ export function InsightsPage() {
 interface ProposalCardProps {
   p: Proposal;
   selected: boolean;
+  /** Reviewer/admin may approve/reject; viewers see read-only cards. */
+  canApprove: boolean;
   onClick: () => void;
   onApprove: () => void;
   onReject: () => void;
   onSendToDev: () => void;
 }
-function ProposalCard({ p, selected, onClick, onApprove, onReject, onSendToDev }: ProposalCardProps) {
+function ProposalCard({ p, selected, canApprove, onClick, onApprove, onReject, onSendToDev }: ProposalCardProps) {
   return (
     <div className={`proposal-card ${selected ? 'expanded' : ''}`} onClick={onClick}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -207,7 +245,7 @@ function ProposalCard({ p, selected, onClick, onApprove, onReject, onSendToDev }
         ))}
       </div>
 
-      {p.column === 'pending' && (
+      {p.column === 'pending' && canApprove && (
         <div className="proposal-actions">
           <Button size="sm" variant="primary" leftIcon={<Icons.Check />} onClick={(e) => { e.stopPropagation(); onApprove(); }}>Approve</Button>
           <Button size="sm" variant="ghost" leftIcon={<Icons.X />} onClick={(e) => { e.stopPropagation(); onReject(); }}>Reject</Button>
@@ -236,6 +274,8 @@ function ProposalCard({ p, selected, onClick, onApprove, onReject, onSendToDev }
 // ----- Detail panel --------------------------------------------------------
 interface DetailPanelProps {
   p: Proposal;
+  /** Reviewer/admin may approve/reject; viewers see read-only detail. */
+  canApprove: boolean;
   onApprove: () => void;
   onReject: () => void;
   onSendToDev: () => void;
@@ -243,7 +283,7 @@ interface DetailPanelProps {
   onOpenGithub: () => void;
   onViewAgent: (agentId: string | undefined) => void;
 }
-function DetailPanel({ p, onApprove, onReject, onSendToDev, onOpenSlack, onOpenGithub, onViewAgent }: DetailPanelProps) {
+function DetailPanel({ p, canApprove, onApprove, onReject, onSendToDev, onOpenSlack, onOpenGithub, onViewAgent }: DetailPanelProps) {
   return (
     <div className="card" style={{ position: 'sticky', top: 0, maxHeight: 'calc(100vh - 180px)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
@@ -333,9 +373,13 @@ function DetailPanel({ p, onApprove, onReject, onSendToDev, onOpenSlack, onOpenG
       <div style={{ padding: '12px 14px', borderTop: '1px solid var(--border)', display: 'flex', gap: 6, background: 'var(--bg-soft)' }}>
         {p.column === 'pending' && (
           <Fragment>
-            <Button variant="primary" leftIcon={<Icons.Check />} onClick={onApprove} style={{ flex: 1 }}>Approve & queue</Button>
-            <Button variant="ghost" leftIcon={<Icons.X />} onClick={onReject}>Reject</Button>
-            <Button variant="ghost" className="icon-only" onClick={onOpenSlack} title="View Slack thread"><Icons.Slack /></Button>
+            {canApprove && (
+              <Fragment>
+                <Button variant="primary" leftIcon={<Icons.Check />} onClick={onApprove} style={{ flex: 1 }}>Approve & queue</Button>
+                <Button variant="ghost" leftIcon={<Icons.X />} onClick={onReject}>Reject</Button>
+              </Fragment>
+            )}
+            <Button variant="ghost" className="icon-only" onClick={onOpenSlack} title="View Slack thread" style={canApprove ? undefined : { flex: 1 }}><Icons.Slack /></Button>
           </Fragment>
         )}
         {p.column === 'approved' && (

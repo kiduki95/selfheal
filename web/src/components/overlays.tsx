@@ -11,6 +11,7 @@ import { Badge, Button, PriDot, SourceChip, useToast } from './ui';
 import { PROPOSALS } from '../data/mock';
 import type { Proposal } from '../data/mock';
 import type { Route } from '../types';
+import { useAppStore } from '../store';
 
 // Anchor passed to popovers: a measured rect, or `true` when no rect available.
 type Anchor = DOMRect | true;
@@ -191,12 +192,13 @@ function CommandPalette({ onClose, setRoute }: CommandPaletteProps) {
       if (it.id === 'pause-queue') { setRoute('agent'); onClose(); return; }
       if (it.id === 'invite') { setRoute('settings'); onClose(); return; }
       if (it.id === 'toggle-theme') {
-        const cur = document.documentElement.getAttribute('data-theme');
-        const next = cur === 'dark' ? 'light' : 'dark';
-        document.documentElement.setAttribute('data-theme', next);
+        // Theme lives in the Zustand store (single source of truth + the
+        // data-theme side effect). Read the action lazily off the store to
+        // avoid re-rendering the palette on theme changes.
+        useAppStore.getState().toggleTheme();
         onClose(); return;
       }
-      if (it.id === 'open-wizard') { window.dispatchEvent(new CustomEvent('selfheal:open-wizard')); onClose(); return; }
+      if (it.id === 'open-wizard') { useAppStore.getState().openWizard(); onClose(); return; }
     }
   };
 

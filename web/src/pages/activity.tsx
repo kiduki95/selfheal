@@ -5,8 +5,9 @@
 import { Fragment, useState } from 'react';
 import type { ReactNode, MouseEvent } from 'react';
 import { Icons } from '../components/icons';
-import { Card, SectionHead, Badge, Button, Spark } from '../components/ui';
-import { AUDIT_EVENTS, type AuditEvent } from '../data/mock-extras';
+import { Card, SectionHead, Badge, Button, Spark, SkeletonList, ErrorState, EmptyState } from '../components/ui';
+import { useActivity } from '../api/hooks/useActivity';
+import { type AuditEvent } from '../data/mock-extras';
 
 interface ActivityFilters {
   actorKind: string;
@@ -16,6 +17,9 @@ interface ActivityFilters {
 export function ActivityPage() {
   const [filters, setFilters] = useState<ActivityFilters>({ actorKind: 'all', type: 'all' });
   const [openId, setOpenId] = useState<string | null>(null);
+
+  const { data, isLoading, isError, error, refetch } = useActivity();
+  const AUDIT_EVENTS = data?.data ?? [];
 
   const filtered = AUDIT_EVENTS.filter(e => {
     if (filters.actorKind !== 'all' && e.actorKind !== filters.actorKind) return false;
@@ -139,6 +143,14 @@ export function ActivityPage() {
         <SectionHead eyebrow="Timeline" title="Audit log" />
         <div className="l-grid">
           <Card className="col-12">
+            {isLoading && <SkeletonList rows={8} />}
+            {isError && (
+              <ErrorState message={error instanceof Error ? error.message : 'Failed to load activity.'} onRetry={() => refetch()} />
+            )}
+            {!isLoading && !isError && filtered.length === 0 && (
+              <EmptyState icon={<Icons.Activity />} title="No events" body="No audit events match the current filters." />
+            )}
+            {!isLoading && !isError && filtered.length > 0 && (
             <div style={{ padding: '4px 0' }}>
               {Object.entries(grouped).map(([day, events]) => (
                 <Fragment key={day}>
@@ -165,6 +177,7 @@ export function ActivityPage() {
                 </Fragment>
               ))}
             </div>
+            )}
           </Card>
         </div>
       </section>

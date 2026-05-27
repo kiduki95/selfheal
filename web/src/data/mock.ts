@@ -34,7 +34,7 @@ export interface Source {
   region: string;
   rate: number;
   lastSync: string;
-  status: 'ok' | 'warn' | 'err';
+  status: 'ok' | 'warn' | 'error';
   own: boolean;
 }
 
@@ -57,10 +57,9 @@ export interface RepoModule {
   id: string;
   parent: string | null;
   label: string;
-  kind: 'repo' | 'module' | 'feature' | 'orphan';
+  kind: 'repo' | 'module' | 'feature' | 'gap';
   heat: number;
   branchTag?: string;
-  weight?: string;
   isOrphan?: boolean;
 }
 
@@ -182,7 +181,7 @@ export const MODULES: RepoModule[] = [
   { id: 'root',          parent: null,          label: 'loop-app',                kind: 'repo',    heat: 1219 },
 
   { id: 'transcribe',    parent: 'root',        label: 'transcribe/',             kind: 'module',  heat: 312, branchTag: 'main' },
-  { id: 't_ko',          parent: 'transcribe',  label: 'korean-asr',              kind: 'feature', heat: 187, weight: 'hot' },
+  { id: 't_ko',          parent: 'transcribe',  label: 'korean-asr',              kind: 'feature', heat: 187 },
   { id: 't_en',          parent: 'transcribe',  label: 'english-asr',             kind: 'feature', heat: 42 },
   { id: 't_dia',         parent: 'transcribe',  label: 'speaker-diarization',     kind: 'feature', heat: 56 },
   { id: 't_noise',       parent: 'transcribe',  label: 'noise-suppression',       kind: 'feature', heat: 27 },
@@ -212,9 +211,9 @@ export const MODULES: RepoModule[] = [
   { id: 'a_sso',         parent: 'auth',        label: 'sso',                     kind: 'feature', heat: 21 },
 
   // Orphans — clusters we couldn't map to existing code
-  { id: 'orphan_teams',  parent: null,          label: 'ms-teams-integration',    kind: 'orphan',  heat: 64, isOrphan: true },
-  { id: 'orphan_offline',parent: null,          label: 'offline-mode',            kind: 'orphan',  heat: 42, isOrphan: true },
-  { id: 'orphan_widget', parent: null,          label: 'ios-widget',              kind: 'orphan',  heat: 28, isOrphan: true },
+  { id: 'orphan_teams',  parent: null,          label: 'ms-teams-integration',    kind: 'gap',     heat: 64, isOrphan: true },
+  { id: 'orphan_offline',parent: null,          label: 'offline-mode',            kind: 'gap',     heat: 42, isOrphan: true },
+  { id: 'orphan_widget', parent: null,          label: 'ios-widget',              kind: 'gap',      heat: 28, isOrphan: true },
 ];
 
 // ----- Reviews (for graph side panel) --------------------------------------
