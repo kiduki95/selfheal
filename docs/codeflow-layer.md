@@ -46,6 +46,15 @@ const risk = classifyCodeRisk(c.path, c.module, c.symbol, c.desc);              
 > export(`module.exports = router`, `module.exports = require('…')`, `mongoose.model(…)`)·`Object.assign`·`@/` 별칭은
 > 미해소(전부 *missing* 엣지로만 degrade, false 없음). 빈 스캔은 `scripts/codeflow-scan.ts`에서 **loud-fail**.
 
+> **code-health 보강 (2026-05-27, P1 — "코드=2번째 리뷰어"):** 수요측(유저 리뷰)에 더해 **공급측** 신호를
+> CodeFlow가 결정론으로 생산한다(LLM 0). 아티팩트별 메트릭: cyclomatic complexity·LOC(AST)·fan-in/out(엣지)·
+> **churn**(git 이력, best-effort 주입)·test-presence. 임계값 기반 smell 3종 — **god_file**(거대·복잡 파일),
+> **complex_function**(분기 과다 함수; 클래스는 메서드 합산이라 제외), **untested_hotspot**(churn×complexity×fan-in,
+> 테스트 0 — CodeScene 핫스팟 테제, 이자율 최고 부채). 파일별 0–100 **health_score**. 적재: `code_artifact_registry`
+> 메트릭 컬럼 + `code_smells` 테이블(009 마이그레이션). 벤더/min 번들은 그래프에서 제외(노이즈). **단계**: P1=검출/적재(완료),
+> P2=Insight `refactor` proposal(부채이자), P3=착지대 게이트(toxic 모듈 선행 refactor), P4=Auto-Dev 행위보존 검증·중복 smell.
+> **kiduki-gcs 실측**: smell 13건(drone.manager.js 4059줄→god_file critical 등, 최악 파일 health 0).
+
 ---
 
 ## 1. 목적과 책임
