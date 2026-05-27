@@ -38,7 +38,7 @@
 | 2 | **Processing** | raw review → 코드-grounded `ProcessedReview` (분류·PII·번역·feature/code 매핑·신호 집계) | `processed_reviews`, `signal_groups` | 🟢 Phase1·2 + 관찰가능성 완료 | `src/processing/` (stages + pipeline) |
 | 3 | **CodeFlow** | 대상 repo → module→feature→artifact 코드 지도 (리뷰가 착지할 곳) | `code_artifact_registry`, `code_edges`, `feature_registry` | 🟢 결정론 스캔 + sub-feature 분해 동작 | `src/codeflow/` |
 | 4 | **Insight & Proposal** | 신호를 우선순위 매겨 issue 초안 (bug/gap/enhancement) + gap 클러스터링·코드그래프 검증 | `proposals` | 🟢 v1 동작 | `src/insight/` |
-| 5 | **Auto-Dev** | 승인된 proposal → 브랜치·코드·테스트·PR | `agent_runs`(예정) | 🟡 설계 확정([autodev-layer.md](./autodev-layer.md)), 미구현 | — |
+| 5 | **Auto-Dev** | 승인된 proposal → 브랜치·코드·테스트·PR(dry-run patch) | `agent_runs`, `agent_run_events` | 🟢 v1(Stub driver, dry-run) + API live([autodev-layer.md](./autodev-layer.md)) | `src/autodev/` |
 
 > **경계 원칙** (각 레이어 스펙의 §1.3 합집합): "누가 같은 문제인가"는 Processing, "무엇부터 고칠까"는 Insight, "어떻게 고칠까/PR"은 Auto-Dev, "어디에 고칠까(코드 위치)"는 CodeFlow가 깐 지도. Ingestion·CodeFlow는 **읽기 전용**(제품 repo에 쓰지 않음).
 
@@ -71,8 +71,8 @@ UI는 `web/`의 **Vite + React + TypeScript** 목업이다(`web/src/`, `npm --pr
 | Reviews | `RAW_REVIEWS` | `GET /api/reviews` | `processed_reviews` | 🟢 가능 |
 | Processing | `MODULES`, `REVIEWS` | `GET /api/graph` | `feature_registry` 트리 + gap + `processed_reviews` | 🟢 가능 (기존 `ui-server.ts` buildGraph 재사용) |
 | Insights | `PROPOSALS` | `GET /api/proposals` | `proposals` | 🟢 가능 |
-| Auto-Dev | `AGENTS`, `TERMINAL_LINES` | `GET /api/agents` | Auto-Dev `agent_runs` | 🔴 Auto-Dev 미구현 |
-| Activity | `AUDIT_EVENTS` | `GET /api/activity` | `audit_events` | 🔴 audit 레이어 대기 |
+| Auto-Dev | `AGENTS`, `TERMINAL_LINES` | `GET /api/agents` | Auto-Dev `agent_runs` (+ `agent_run_events`로 steps) | 🟢 live (v1-c) |
+| Activity | `AUDIT_EVENTS` | `GET /api/activity` | `agent_run_events` (타 소스는 후속 합류) | 🟢 live (v1-c, Auto-Dev 이벤트원) |
 | Settings | — | `GET /api/config` | `src/config.ts` | 🟡 read-only 노출부터 |
 
 ### 3.2 컨트랙트 원칙
@@ -172,8 +172,8 @@ selfheal/
 4. **Reviews 페이지 live** — `/api/reviews` ← `processed_reviews`. feature 매핑·신호 배지 포함.
 5. **Dashboard 부분 live** — funnel/category는 집계로, activity는 audit 레이어 대기.
 6. **Ingestion(레이어1)** — `sources`/`raw_reviews` 테이블 + 첫 커넥터 → Sources 페이지 live, corpus 대역 축소.
-7. **Auto-Dev(레이어5)** — `agent_runs` + 승인 proposal 소비 → Agents 페이지 live.
-8. **Audit** — `audit_events` → Activity 페이지 + Dashboard activity live.
+7. ✅ **Auto-Dev(레이어5)** — `agent_runs`/`agent_run_events` + 승인 proposal 소비 → `GET /api/agents` live(v1-c). 실행단은 `src/autodev/`(Stub driver, dry-run patch). 상세 [autodev-layer.md](./autodev-layer.md).
+8. ✅ **Activity** — `GET /api/activity` ← `agent_run_events` live(v1-c). 전용 `audit_events` 테이블은 후속(타 레이어 이벤트 합류 시).
 
 각 단계는 독립 커밋. UI는 mock fallback이 있어 미배선 페이지도 안 깨진다.
 

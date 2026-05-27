@@ -8,6 +8,8 @@ import graph from './routes/graph.js';
 import proposals from './routes/proposals.js';
 import reviews from './routes/reviews.js';
 import dashboard from './routes/dashboard.js';
+import agents from './routes/agents.js';
+import activity from './routes/activity.js';
 
 // Assembles the Hono app (docs/architecture.md §3): mounts per-resource routers under /api + static web/.
 // Adding a layer = one router file + one line here. serve.ts only boots this app via the Node adapter.
@@ -25,6 +27,8 @@ export function createApp(db: Db = new Db()): Hono<ApiEnv> {
   api.route('/proposals', proposals);
   api.route('/reviews', reviews);
   api.route('/dashboard', dashboard);
+  api.route('/agents', agents);     // Auto-Dev runs (agent_runs)
+  api.route('/activity', activity); // audit/activity feed (agent_run_events)
   // Unbuilt layers — mock-shaped 501 (UI keeps its mock fallback). Promote to a real router (as above) when the layer exists.
   for (const spec of ROUTES.filter((r) => r.status === 'planned')) {
     api.route(spec.path.replace(/^\/api/, ''), plannedRoute(spec));

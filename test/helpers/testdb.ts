@@ -13,13 +13,19 @@ import { dirname, join } from 'node:path';
 // PipelineCtx forced onto StubLlmClient + LocalEmbeddingClient → fully deterministic, no claude-cli,
 // no API cost. This is what lets every fix be gated by a fast, repeatable test instead of eyeballing.
 const ADMIN_URL = process.env.DATABASE_URL ?? 'postgres://ouroboros:ouroboros@localhost:5433/ouroboros';
-const TEST_DB = process.env.TEST_DB_NAME ?? 'ouroboros_test';
+const TEST_DB_BASE = process.env.TEST_DB_NAME ?? 'ouroboros_test';
 const here = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = join(here, '..', '..', 'db', 'migrations');
 
-function testUrl(): string {
+// Each setupTestDb() call gets its OWN database. Test files must never share one mutable DB: under
+// vitest scheduling, two files' setup (DROP/CREATE/migrate) can overlap, producing flaky
+// "database does not exist" / "relation … does not exist" errors. A per-call unique name removes the
+// race entirely (each beforeAll is isolated). dropTestDb looks the name up by the Db handle.
+const dbNameOf = new WeakMap<Db, string>();
+
+function testUrl(name: string): string {
   const u = new URL(ADMIN_URL);
-  u.pathname = '/' + TEST_DB;
+  u.pathname = '/' + name;
   return u.toString();
 }
 
@@ -37,11 +43,14 @@ export async function canConnect(): Promise<boolean> {
 }
 
 export async function setupTestDb(): Promise<Db> {
+  // Unique, valid (lowercase alnum + underscore) database name per call.
+  const name = `${TEST_DB_BASE}_${process.pid.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   const admin = new Db(ADMIN_URL);
-  await admin.query(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
-  await admin.query(`CREATE DATABASE ${TEST_DB}`);
+  await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+  await admin.query(`CREATE DATABASE ${name}`);
   await admin.close();
-  const db = new Db(testUrl());
+  const db = new Db(testUrl(name));
+  dbNameOf.set(db, name);
   for (const f of readdirSync(migrationsDir).filter((x) => x.endsWith('.sql')).sort()) {
     await db.query(readFileSync(join(migrationsDir, f), 'utf8'));
   }
@@ -49,9 +58,10 @@ export async function setupTestDb(): Promise<Db> {
 }
 
 export async function dropTestDb(db: Db): Promise<void> {
+  const name = dbNameOf.get(db) ?? TEST_DB_BASE;
   await db.close();
   const admin = new Db(ADMIN_URL);
-  await admin.query(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`).catch(() => {});
+  await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`).catch(() => {});
   await admin.close();
 }
 

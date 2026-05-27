@@ -178,6 +178,6 @@ export const ROUTES: RouteSpec[] = [
   { path: '/api/reviews',   page: 'reviews',    status: 'live',    backend: 'processed_reviews',                                roadmapStep: 4 },
   { path: '/api/dashboard', page: 'dashboard',  status: 'live',    backend: 'metric_snapshots + processed_reviews aggregate (activity awaits audit)', roadmapStep: 5 },
   { path: '/api/sources',   page: 'sources',    status: 'planned', backend: 'Ingestion sources (not built)',                    roadmapStep: 6 },
-  { path: '/api/agents',    page: 'agent',      status: 'planned', backend: 'Auto-Dev agent_runs (not built)',                  roadmapStep: 7 },
-  { path: '/api/activity',  page: 'activity',   status: 'planned', backend: 'audit_events (not built)',                         roadmapStep: 8 },
+  { path: '/api/agents',    page: 'agent',      status: 'live',    backend: 'Auto-Dev agent_runs + agent_run_events (steps)',    roadmapStep: 7 },
+  { path: '/api/activity',  page: 'activity',   status: 'live',    backend: 'agent_run_events (other sources fold in later)',    roadmapStep: 8 },
 ];

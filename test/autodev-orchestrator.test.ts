@@ -1,0 +1,153 @@
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { existsSync } from 'node:fs';
+import { canConnect, setupTestDb, dropTestDb, truncateAll } from './helpers/testdb.js';
+import { makeGitFixture, type GitFixture } from './helpers/gitfixture.js';
+import { runAutoDev } from '../src/autodev/orchestrator.js';
+import { StubAgentDriver, type StubScript } from '../src/autodev/drivers/stub.js';
+import type { Db } from '../src/db/db.js';
+
+// End-to-end Auto-Dev orchestration tests (spec §9.2 cases). Run rows live in the isolated test DB;
+// the worktree/verify run against a hermetic git fixture; the StubAgentDriver makes the path fully
+// deterministic (no model). Covers: approved → pr_open, empty-diff rejected, scope-violation rejected,
+// duplicate claim blocked, verify-failure retry → rejected_by_verifier, and workspace cleanup.
+const reachable = await canConnect();
+const REPO = 'test/autodev';
+const REF = 'sig-orch00001';
+
+// Seed one approved bug_fix proposal (proposals + proposal_reviews = the dispatch contract).
+async function seedApproved(db: Db, ref = REF): Promise<void> {
+  await db.query(
+    `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence)
+     VALUES ($1,'bug_fix',$2,'[bug] order crash','repro: tap buy',90,'src/orders',NULL,$3)`,
+    [REPO, ref, JSON.stringify({ code_risk: 'low' })],
+  );
+  await db.decideProposal({ repo: REPO, kind: 'bug_fix', ref_id: ref, decision: 'approved' });
+}
+
+const PASS = { build: () => ({ ok: true, output: '' }), test: () => ({ ok: true, output: '' }) };
+
+// In-scope edit + a regression test (passes all gates).
+const goodScript: StubScript = {
+  edits: [
+    { path: 'src/orders/order.ts', content: 'export function placeOrder() { return 42; }\n' },
+    { path: 'src/orders/order.test.ts', content: 'export const fixed = true;\n' },
+  ],
+};
+
+describe.skipIf(!reachable)('Auto-Dev orchestrator', () => {
+  let db: Db;
+  let fx: GitFixture;
+  beforeAll(async () => { db = await setupTestDb(); });
+  afterAll(async () => { await dropTestDb(db); });
+  beforeEach(async () => { await truncateAll(db); fx = makeGitFixture(); });
+  afterEach(() => { fx.dispose(); });
+
+  function opts(driver: StubAgentDriver, extra: Partial<Parameters<typeof runAutoDev>[1]> = {}) {
+    return {
+      db, mirrorDir: fx.dir, workspacesRoot: `${fx.dir}-ws`,
+      driver, verify: PASS, noBackoff: true, sleep: async () => {}, maxAttempts: 2, ...extra,
+    } as Parameters<typeof runAutoDev>[1];
+  }
+
+  it('approved proposal → pr_open + patch artifact + proposal flips to in_dev', async () => {
+    await seedApproved(db);
+    const outcomes = await runAutoDev(REPO, opts(new StubAgentDriver(goodScript)));
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]!.status).toBe('pr_open');
+
+    const run = await db.getAgentRun(outcomes[0]!.runId);
+    expect(run?.status).toBe('pr_open');
+    expect(run?.branch).toBe('selfheal/bug_fix-sig-orch'); // selfheal/bug_fix-<ref8>, ref8='sig-orch'
+    expect(run?.base_sha).toBeTruthy();
+    expect(run?.pr_url).toBeTruthy();
+    expect(existsSync(run!.pr_url!)).toBe(true); // dry-run patch artifact on disk
+
+    const review = await db.query<{ decision: string }>(`SELECT decision FROM proposal_reviews WHERE ref_id=$1`, [REF]);
+    expect(review[0]?.decision).toBe('in_dev');
+
+    const events = await db.query<{ phase: string }>(`SELECT phase FROM agent_run_events WHERE run_id=$1 ORDER BY ts`, [outcomes[0]!.runId]);
+    expect(events.map((e) => e.phase)).toContain('pr_open');
+  });
+
+  it('empty diff is rejected', async () => {
+    await seedApproved(db);
+    const outcomes = await runAutoDev(REPO, opts(new StubAgentDriver({ noChanges: true })));
+    expect(outcomes[0]!.status).toBe('rejected_by_verifier');
+    const run = await db.getAgentRun(outcomes[0]!.runId);
+    expect(run?.status).toBe('rejected_by_verifier');
+    expect(run?.verdict?.gates?.find((g: any) => g.name === 'diff_nonempty')?.pass).toBe(false);
+  });
+
+  it('scope violation is rejected', async () => {
+    await seedApproved(db);
+    const badScope: StubScript = { edits: [{ path: 'src/unrelated/hack.ts', content: 'export const x=1;\n' }] };
+    const outcomes = await runAutoDev(REPO, opts(new StubAgentDriver(badScope)));
+    expect(outcomes[0]!.status).toBe('rejected_by_verifier');
+  });
+
+  it('blocks a duplicate claim — only one active run per proposal', async () => {
+    await seedApproved(db);
+    // Pre-claim a run so the orchestrator's claim hits the partial-unique active index.
+    const claimed = await db.createAgentRun({ repo: REPO, kind: 'bug_fix', ref_id: REF, status: 'implementing' });
+    expect(claimed).not.toBeNull();
+    const dup = await db.createAgentRun({ repo: REPO, kind: 'bug_fix', ref_id: REF, status: 'queued' });
+    expect(dup).toBeNull(); // second claim refused
+
+    // The orchestrator sees the active run and skips dispatch entirely.
+    const outcomes = await runAutoDev(REPO, opts(new StubAgentDriver(goodScript)));
+    expect(outcomes).toHaveLength(0);
+  });
+
+  it('verify-failure retries then ends rejected_by_verifier when retries are exhausted', async () => {
+    await seedApproved(db);
+    // Every attempt writes out of scope → verify always fails → exhaust maxAttempts.
+    const alwaysBad: StubScript = { edits: [{ path: 'src/unrelated/hack.ts', content: 'export const x=1;\n' }] };
+    const outcomes = await runAutoDev(REPO, opts(new StubAgentDriver(alwaysBad), { maxAttempts: 2 }));
+    expect(outcomes[0]!.status).toBe('rejected_by_verifier');
+    const run = await db.getAgentRun(outcomes[0]!.runId);
+    expect(run?.attempt).toBe(2); // attempts 0,1,2 ran
+
+    // One "driver attempt N" transition event per attempt (0,1,2) → 3.
+    const impl = await db.query<{ n: string }>(`SELECT count(*) n FROM agent_run_events WHERE run_id=$1 AND phase='implementing' AND message LIKE 'driver attempt%'`, [outcomes[0]!.runId]);
+    expect(Number(impl[0]!.n)).toBe(3);
+  });
+
+  it('retries with feedback and succeeds on a later attempt', async () => {
+    await seedApproved(db);
+    // attempt 0 = out of scope (fails), attempt 1 = in scope + test (passes).
+    const perAttempt: StubScript = {
+      perAttempt: {
+        0: [{ path: 'src/unrelated/hack.ts', content: 'export const x=1;\n' }],
+        1: [
+          { path: 'src/orders/order.ts', content: 'export function placeOrder() { return 7; }\n' },
+          { path: 'src/orders/order.test.ts', content: 'export const ok = true;\n' },
+        ],
+      },
+    };
+    const outcomes = await runAutoDev(REPO, opts(new StubAgentDriver(perAttempt)));
+    expect(outcomes[0]!.status).toBe('pr_open');
+    const run = await db.getAgentRun(outcomes[0]!.runId);
+    expect(run?.attempt).toBe(1);
+  });
+
+  it('cleans up the worktree after a run (success or rejection)', async () => {
+    await seedApproved(db);
+    const outcomes = await runAutoDev(REPO, opts(new StubAgentDriver(goodScript)));
+    const run = await db.getAgentRun(outcomes[0]!.runId);
+    expect(run?.workspace_path).toBeTruthy();
+    expect(existsSync(run!.workspace_path!)).toBe(false); // worktree torn down
+  });
+
+  it('forces manual-review draft handoff for a critical risk tier (still pr_open)', async () => {
+    await db.query(
+      `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence)
+       VALUES ($1,'bug_fix','sig-critical1','[bug] payment fails','repro',95,'src/orders',NULL,$2)`,
+      [REPO, JSON.stringify({ code_risk: 'critical' })],
+    );
+    await db.decideProposal({ repo: REPO, kind: 'bug_fix', ref_id: 'sig-critical1', decision: 'approved' });
+    const outcomes = await runAutoDev(REPO, opts(new StubAgentDriver(goodScript)));
+    expect(outcomes[0]!.status).toBe('pr_open');
+    const run = await db.getAgentRun(outcomes[0]!.runId);
+    expect(run?.verdict?.manualReview).toBe(true);
+  });
+});

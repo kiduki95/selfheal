@@ -13,6 +13,9 @@ export const config = {
   cohereApiKey: process.env.COHERE_API_KEY,
   // 이 selfheal 인스턴스가 매핑 대상으로 삼는 product codebase (codeflow가 채운 repo).
   targetRepo: process.env.TARGET_REPO ?? 'tete-lab/automated-trading-system',
+  // Auto-Dev coding-agent driver (layer 5). stub=LLM-free 결정론(키0) · claude-cli=구독 Claude(v2) ·
+  // anthropic=Agent SDK(구독 소진 후). 기본 stub — makeLlmClient 패턴과 동일한 DI 스위치.
+  agentDriver: (process.env.AGENT_DRIVER ?? 'stub') as 'stub' | 'claude-cli' | 'anthropic',
 };
 
 // per-component 버전 (spec §3 versions). 클라이언트 종류에 따라 동적으로 결정해

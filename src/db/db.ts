@@ -37,6 +37,34 @@ export interface CodeMatch {
   via: 'feature_link' | 'semantic_match' | 'historical_signature';
 }
 
+// Auto-Dev run statuses considered terminal (claim released, no reaping). `pr_open` is the dry-run
+// success/handoff terminal (spec §2) — it MUST be here so the reaper never flips a finished handoff to
+// timed_out and so updateAgentRun stamps ended_at on it. The partial-unique index predicate
+// (008_autodev.sql), createAgentRun's ON CONFLICT WHERE, and reapStaleRuns are all derived from this
+// one list (TERMINAL_SQL) so the four sets can never drift apart.
+export const TERMINAL_RUN_STATUSES = ['pr_open', 'succeeded', 'failed', 'timed_out', 'rejected_by_verifier', 'canceled'] as const;
+// SQL list literal built from the constant above (compile-time values only — no injection surface).
+const TERMINAL_SQL = TERMINAL_RUN_STATUSES.map((s) => `'${s}'`).join(',');
+
+export interface AgentRunRow {
+  id: string;
+  repo: string;
+  kind: string;
+  ref_id: string;
+  branch: string | null;
+  base_sha: string | null;
+  status: string;
+  attempt: number;
+  workspace_path: string | null;
+  pr_url: string | null;
+  verdict: any;
+  tokens: number | null;
+  error: string | null;
+  started_at: string;
+  updated_at: string;
+  ended_at: string | null;
+}
+
 // pg는 bigint/numeric를 string으로 주므로 cosine 계산은 SQL에서 끝낸다.
 export class Db {
   private pool: pg.Pool;
@@ -646,5 +674,110 @@ export class Db {
     } finally {
       client.release();
     }
+  }
+
+  // === Auto-Dev Layer (layer 5) — agent_runs / agent_run_events ===
+
+  // Claim a proposal for a run by inserting against the partial-unique active index. If a non-terminal
+  // run already exists for (repo, kind, ref_id), ON CONFLICT DO NOTHING returns no row → claim refused.
+  // This is the single serialization point that prevents double-dispatch (spec §2 invariant).
+  async createAgentRun(p: { repo: string; kind: string; ref_id: string; status?: string }): Promise<AgentRunRow | null> {
+    const rows = await this.query<AgentRunRow>(
+      `INSERT INTO agent_runs (repo, kind, ref_id, status)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (repo, kind, ref_id) WHERE status NOT IN (${TERMINAL_SQL})
+       DO NOTHING
+       RETURNING *`,
+      [p.repo, p.kind, p.ref_id, p.status ?? 'queued'],
+    );
+    return rows[0] ?? null;
+  }
+
+  // Patch a run row. Only provided fields are written; updated_at is always bumped, ended_at is set
+  // automatically when transitioning into a terminal status.
+  async updateAgentRun(id: string, p: Partial<Pick<AgentRunRow, 'status' | 'attempt' | 'branch' | 'base_sha' | 'workspace_path' | 'pr_url' | 'tokens' | 'error'>> & { verdict?: unknown }): Promise<void> {
+    const sets: string[] = [];
+    const vals: unknown[] = [id];
+    const push = (col: string, v: unknown) => { vals.push(v); sets.push(`${col} = $${vals.length}`); };
+    if (p.status !== undefined) push('status', p.status);
+    if (p.attempt !== undefined) push('attempt', p.attempt);
+    if (p.branch !== undefined) push('branch', p.branch);
+    if (p.base_sha !== undefined) push('base_sha', p.base_sha);
+    if (p.workspace_path !== undefined) push('workspace_path', p.workspace_path);
+    if (p.pr_url !== undefined) push('pr_url', p.pr_url);
+    if (p.tokens !== undefined) push('tokens', p.tokens);
+    if (p.error !== undefined) push('error', p.error);
+    if (p.verdict !== undefined) push('verdict', JSON.stringify(p.verdict));
+    sets.push('updated_at = now()');
+    if (p.status !== undefined && (TERMINAL_RUN_STATUSES as readonly string[]).includes(p.status)) sets.push('ended_at = now()');
+    await this.query(`UPDATE agent_runs SET ${sets.join(', ')} WHERE id = $1`, vals);
+  }
+
+  // Append a progress event (audit/stream source).
+  async appendRunEvent(runId: string, phase: string, message: string | null, payload?: unknown): Promise<void> {
+    await this.query(
+      `INSERT INTO agent_run_events (run_id, phase, message, payload) VALUES ($1, $2, $3, $4)`,
+      [runId, phase, message, payload === undefined ? null : JSON.stringify(payload)],
+    );
+  }
+
+  // The active (non-terminal) run for a proposal, if any. Used to filter the dispatch queue so an
+  // already-running or already-succeeded proposal isn't claimed again.
+  async activeRunFor(repo: string, kind: string, ref_id: string): Promise<AgentRunRow | null> {
+    const rows = await this.query<AgentRunRow>(
+      `SELECT * FROM agent_runs
+       WHERE repo = $1 AND kind = $2 AND ref_id = $3
+         AND status NOT IN ('failed','timed_out','rejected_by_verifier','canceled')
+       ORDER BY started_at DESC LIMIT 1`,
+      [repo, kind, ref_id],
+    );
+    return rows[0] ?? null;
+  }
+
+  async getAgentRun(id: string): Promise<AgentRunRow | null> {
+    const rows = await this.query<AgentRunRow>(`SELECT * FROM agent_runs WHERE id = $1`, [id]);
+    return rows[0] ?? null;
+  }
+
+  // Reaper (spec §2): a crashed/stalled run holds the active claim forever (the partial-unique index
+  // only frees on a terminal status). Move any non-terminal run whose updated_at is older than
+  // `staleMs` to 'timed_out' so its claim releases and the proposal can be re-dispatched. Returns the
+  // reaped run ids. `nowSql` is injectable so tests can drive it deterministically against seeded rows.
+  async reapStaleRuns(staleMs: number, nowSql = 'now()'): Promise<string[]> {
+    const rows = await this.query<{ id: string }>(
+      `UPDATE agent_runs
+         SET status = 'timed_out', error = COALESCE(error, 'reaped: stalled past threshold'),
+             updated_at = ${nowSql}, ended_at = ${nowSql}
+       WHERE status NOT IN (${TERMINAL_SQL})
+         AND updated_at < ${nowSql} - ($1::bigint * interval '1 millisecond')
+       RETURNING id`,
+      [Math.floor(staleMs)],
+    );
+    return rows.map((r) => r.id);
+  }
+
+  // List runs for a repo (newest first) with the proposal title + HITL decision joined — the
+  // /api/agents source. LATERAL keeps it one row per run even if proposals regenerated duplicates.
+  async listAgentRuns(repo: string, limit = 50): Promise<(AgentRunRow & { title: string | null; decision: string | null })[]> {
+    return this.query(
+      `SELECT r.*, p.title, rv.decision
+       FROM agent_runs r
+       LEFT JOIN LATERAL (SELECT title FROM proposals WHERE repo = r.repo AND kind = r.kind AND ref_id = r.ref_id LIMIT 1) p ON true
+       LEFT JOIN proposal_reviews rv ON rv.repo = r.repo AND rv.kind = r.kind AND rv.ref_id = r.ref_id
+       WHERE r.repo = $1 ORDER BY r.started_at DESC LIMIT $2`,
+      [repo, limit],
+    );
+  }
+
+  // Progress events for a repo's runs (newest first) with run context joined — the source for both
+  // the /api/activity feed and the per-run step timeline on /api/agents.
+  async listAgentRunEvents(repo: string, limit = 200): Promise<{ id: string; run_id: string; ts: string; phase: string; message: string | null; payload: any; branch: string | null; kind: string; ref_id: string }[]> {
+    return this.query(
+      `SELECT e.id::text AS id, e.run_id, e.ts::text AS ts, e.phase, e.message, e.payload,
+              r.branch, r.kind, r.ref_id
+       FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id
+       WHERE r.repo = $1 ORDER BY e.ts DESC LIMIT $2`,
+      [repo, limit],
+    );
   }
 }

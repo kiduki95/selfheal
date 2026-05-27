@@ -16,6 +16,7 @@
     "codeflow:scan": "tsx scripts/codeflow-scan.ts",
     "run:corpus": "tsx scripts/run-corpus.ts",
     "insight": "tsx scripts/insight.ts",
+    "autodev": "tsx scripts/autodev.ts",
     "ui": "tsx scripts/ui-server.ts",
     "web:dev": "npm --prefix web run dev",
     "web:build": "npm --prefix web run build",
