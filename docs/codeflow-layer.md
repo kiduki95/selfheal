@@ -55,7 +55,7 @@ const risk = classifyCodeRisk(c.path, c.module, c.symbol, c.desc);              
 > **변경결합(co-change, ✅)** — 증상(크기·복잡도)을 넘어 **책임/의존 기반** 진단: git 이력에서 함께 커밋되는 파일쌍(support/confidence,
 > Tornhill 논리적 결합)을 churn과 **같은 git 패스**로 뽑아, **구조적 그래프와 교차** → `hidden_coupling`(함께 바뀌나 import/call 연결 없음=암묵 의존)·
 > `boundary_coupling`(타모듈과 함께 변경=경계 누수) smell. `code_cochange` 테이블(010). refactor 제안에 **"왜 바뀌나"**(함께 변경 파일+숨은/타모듈 표시) 보강.
-> **단계**: P1 검출(✅) · P2 refactor proposal(부채이자=오염도×churn, 버그우위)(✅) · co-change 책임진단(✅) · **P3 착지대 게이트(✅)** — toxic 모듈에 버그/기능이 착지하면 선행 refactor를 `proposals.prerequisite`로 묶고 Auto-Dev가 그 refactor가 in_dev/done될 때까지 보류(순서강제·온오프 `config.landingZoneGate`, Preparatory Refactoring) · P4 Auto-Dev 행위보존 검증(특성화 테스트)+refactor brief framing.
+> **단계**: P1 검출(✅) · P2 refactor proposal(부채이자=오염도×churn, 버그우위)(✅) · co-change 책임진단(✅) · **P3 착지대 게이트(✅)** — toxic 모듈에 버그/기능이 착지하면 선행 refactor를 `proposals.prerequisite`로 묶고 Auto-Dev가 그 refactor가 in_dev/done될 때까지 보류(순서강제·온오프 `config.landingZoneGate`, Preparatory Refactoring) · **신선도+충돌회피(✅)** — 제안에 대상파일 지문(`grounded_hash`) 스탬프 → Auto-Dev가 코드 이동 시 스테일 제안 보류(재스캔+재insight로 regrounding) + 같은파일 직렬화(run당/run간 1개) → 멀티티켓 일관성(스테일 코드 위 작업·동시 같은파일 금지). · P4 Auto-Dev 행위보존 검증(특성화 테스트)+refactor brief framing.
 > **실측**: kiduki-gcs smell 13건(drone.manager.js 4059줄→god_file critical), dogfood(자기 백엔드)는 scan.ts↔languages.ts를 *구조적*(거짓경보X)으로 정확 분류.
 
 ---
