@@ -3,6 +3,7 @@ import { makeEmbeddingClient } from '../src/clients/embedding/index.js';
 import { makeLlmClient } from '../src/clients/llm/index.js';
 import { scanRepo, persistScan } from '../src/codeflow/index.js';
 import { CODE_EXTENSIONS } from '../src/codeflow/languages.js';
+import { computeChurn } from '../src/codeflow/churn.js';
 
 // codeflow dogfood: selfheal 자체 src를 스캔해 코드 그래프를 적재 + "모듈→기능" 요약 출력.
 // 네 비전 1단계 ("현재 코드베이스 기준 어느 모듈에 어떤 기능들이 있는지 스캔·정리")의 구현.
@@ -17,7 +18,9 @@ async function main() {
   const llm = enrich ? makeLlmClient() : undefined;
 
   console.log(`\n=== CodeFlow scan: ${repo} (${rootDir})  enrich=${enrich ? 'on' : 'off'} ===`);
-  const scan = scanRepo({ rootDir, repo });
+  // Git churn (code-health hotspot input) — best-effort; non-git rootDir → empty (no churn metrics).
+  const churn = computeChurn(rootDir);
+  const scan = scanRepo({ rootDir, repo, churn });
 
   // Fail loud on an empty scan (F2). persistScan does a destructive repo-scoped rebuild (DELETE then
   // INSERT), so persisting 0 nodes would silently WIPE the existing good graph and leave nothing — the
@@ -28,7 +31,7 @@ async function main() {
     throw new Error(
       `CodeFlow scan produced 0 nodes for ${repo} at ${rootDir}. ` +
       `No parseable source files were found under the auto-detected roots. ` +
-      `Supported extensions: ${CODE_EXTENSIONS.join(', ')} (.vue not yet supported). ` +
+      `Supported extensions: ${CODE_EXTENSIONS.join(', ')}. ` +
       `Check the repo's source layout or pass explicit srcDirs. Refusing to persist an empty graph ` +
       `(it would wipe the existing one).`,
     );
@@ -36,7 +39,7 @@ async function main() {
 
   const stats = await persistScan(scan, db, embedder, llm);
 
-  console.log(`\n적재 완료: nodes=${stats.nodes} (${JSON.stringify(stats.byKind)}) edges=${stats.edges} features=${stats.features}`);
+  console.log(`\n적재 완료: nodes=${stats.nodes} (${JSON.stringify(stats.byKind)}) edges=${stats.edges} features=${stats.features} smells=${stats.smells}`);
 
   // 모듈 → 기능(심볼) 요약 — "전체 뷰"의 텍스트 버전
   console.log(`\n--- 모듈 → 기능(exported symbols) ---`);
@@ -73,6 +76,30 @@ async function main() {
   );
   console.log(`\n--- code-derived features (grounded): ${feats.length} ---`);
   console.log(`  ${feats.map((f) => f.pref_label).join(', ')}`);
+
+  // code-health (P1) — top smells (debt magnitude) + unhealthiest files. The supply-side "2nd reviewer".
+  const smells = await db.query<{ kind: string; severity: string; score: string; path: string; symbol: string | null; evidence: any }>(
+    `SELECT s.kind, s.severity, s.score::text, a.path, a.symbol, s.evidence
+     FROM code_smells s JOIN code_artifact_registry a ON a.id = s.artifact_id
+     WHERE s.repo=$1 ORDER BY s.score DESC LIMIT 15`,
+    [repo],
+  );
+  console.log(`\n--- code smells (top ${smells.length} by debt score) ---`);
+  for (const s of smells) {
+    const ev = s.evidence ?? {};
+    const detail = s.kind === 'untested_hotspot' ? `churn=${ev.churn} cyclo=${ev.cyclomatic} fan_in=${ev.fan_in}`
+      : s.kind === 'god_file' ? `loc=${ev.loc} cyclo=${ev.cyclomatic} symbols=${ev.symbols}`
+      : `cyclo=${ev.cyclomatic} loc=${ev.loc}`;
+    console.log(`  ${String(s.score).padStart(3)} [${s.severity.padEnd(8)}] ${s.kind.padEnd(17)} ${s.symbol ?? s.path}  (${detail})`);
+  }
+  const unhealthy = await db.query<{ path: string; health_score: string; loc: string; cyclomatic: string; churn_commits: string; has_test: boolean }>(
+    `SELECT path, health_score::text, loc::text, cyclomatic::text, churn_commits::text, has_test
+     FROM code_artifact_registry WHERE repo=$1 AND kind='file' AND health_score IS NOT NULL
+     ORDER BY health_score ASC LIMIT 10`,
+    [repo],
+  );
+  console.log(`\n--- unhealthiest files (health 0=worst) ---`);
+  for (const u of unhealthy) console.log(`  ${String(u.health_score).padStart(3)}  ${u.path}  (loc=${u.loc} cyclo=${u.cyclomatic} churn=${u.churn_commits} test=${u.has_test ? 'y' : 'n'})`);
 
   await db.close();
 }

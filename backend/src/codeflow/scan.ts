@@ -2,8 +2,11 @@ import ts from 'typescript';
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, relative, dirname, sep } from 'node:path';
-import { isCodeFile, isDeclarationFile, isTestSourceFile, prepareSource, resolveCandidates, stripSourceExt } from './languages.js';
+import { isCodeFile, isDeclarationFile, isTestSourceFile, isVendoredFile, prepareSource, resolveCandidates, stripSourceExt } from './languages.js';
 import { extractCommonJs } from './commonjs.js';
+import { cyclomaticComplexity, loc as nodeLoc, fileLoc } from './metrics.js';
+import { detectSmells, healthFromSmells, type ArtifactMetric, type SmellSpec } from './smells.js';
+import type { Churn } from './churn.js';
 
 // codeflow T1 parse (codeflow-layer.md §4) — TypeScript Compiler API로 결정론 추출 (Claude 0).
 // tree-sitter 대신 이미 있는 `typescript` 의존성 사용 → 네이티브 빌드 없이 크로스플랫폼.
@@ -12,6 +15,18 @@ import { extractCommonJs } from './commonjs.js';
 
 export type NodeKind = 'module' | 'file' | 'symbol';
 
+// Deterministic code-health metrics (code-health P1). Files carry churn/has_test/health; symbols carry
+// their own loc/cyclomatic/fan-in. Undefined when not applicable/uncomputed.
+export interface ArtifactMetrics {
+  loc?: number;
+  cyclomatic?: number;
+  fanIn?: number;
+  fanOut?: number;
+  churnCommits?: number;
+  churnDays?: number;
+  hasTest?: boolean;
+  health?: number; // 0-100, higher = healthier (files)
+}
 export interface ArtifactNode {
   key: string;
   kind: NodeKind;
@@ -22,6 +37,7 @@ export interface ArtifactNode {
   signature: string | null;
   description: string;
   contentHash: string;
+  metrics?: ArtifactMetrics;
 }
 export interface EdgeSpec {
   srcKey: string;
@@ -44,12 +60,16 @@ export interface ScanResult {
   nodes: ArtifactNode[];
   edges: EdgeSpec[];
   features: FeatureSpec[];
+  smells: SmellSpec[];
 }
 export interface ScanOptions {
   rootDir: string;
   repo: string;
   ref?: string;
   srcDirs?: string[]; // 미지정 시 자동감지
+  // Injected git churn (path → {commits, days}); code-health hotspot input. Empty when not provided so
+  // scanRepo stays pure/unit-testable without git (the codeflow-scan script computes + injects it).
+  churn?: Map<string, Churn>;
 }
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'coverage', '.next', 'public', 'styles', '.github', 'vendor', 'build', 'out', 'target', '.venv', '.turbo']);
@@ -60,9 +80,15 @@ export function scanRepo(opts: ScanOptions): ScanResult {
   const root = opts.rootDir;
   const srcDirs = opts.srcDirs ?? SRC_CANDIDATES.filter((d) => existsSync(join(root, d)));
 
-  const files = srcDirs
-    .flatMap((d) => walkCode(join(root, d)))
-    .filter((f) => !isDeclarationFile(f) && !isTestSourceFile(f));
+  const allCode = srcDirs.flatMap((d) => walkCode(join(root, d))).filter((f) => !isDeclarationFile(f) && !isVendoredFile(f));
+  const files = allCode.filter((f) => !isTestSourceFile(f));
+  // Test-presence map (code-health): a source's "base" (path minus extension) is covered if a sibling
+  // test file shares it (e.g. src/foo.ts ↔ src/foo.test.ts). Heuristic, deterministic, no coverage data.
+  const testedBases = new Set<string>();
+  for (const tf of allCode.filter((f) => isTestSourceFile(f))) {
+    testedBases.add(toPosix(relative(root, tf)).replace(/\.(test|spec)\.[cm]?[jt]sx?$/, ''));
+  }
+  const churn = opts.churn ?? new Map<string, Churn>();
 
   const nodes: ArtifactNode[] = [];
   const edges: EdgeSpec[] = [];
@@ -86,13 +112,14 @@ export function scanRepo(opts: ScanOptions): ScanResult {
   const memberCallsByFile = new Map<string, { root: string; method: string }[]>();
   // All symbol keys added (ES + CJS + Vue component) — dedupe so the same symbol isn't emitted twice.
   const symKeysAdded = new Set<string>();
-  const addSymbol = (path: string, mod: string, name: string, kind: string, signature: string, doc: string) => {
+  const addSymbol = (path: string, mod: string, name: string, kind: string, signature: string, doc: string, m?: { loc?: number; cyclomatic?: number }) => {
     const symKey = `${path}#${name}`;
     if (symKeysAdded.has(symKey)) return;
     symKeysAdded.add(symKey);
     nodes.push({
       key: symKey, kind: 'symbol', path, module: mod, symbol: name, symbolKind: kind,
       signature, description: card(path, mod, name, signature, doc), contentHash: sha(symKey + signature),
+      metrics: m ? { loc: m.loc, cyclomatic: m.cyclomatic } : undefined,
     });
     edges.push({ srcKey: path, dstKey: symKey, kind: 'contains' });
     pushMember(moduleMembers, mod, symKey);
@@ -110,6 +137,8 @@ export function scanRepo(opts: ScanOptions): ScanResult {
     fileModule.set(fileKey, module);
     uiSurfaceByFile.set(fileKey, extractUiSurface(prepared.uiText));
 
+    const sf = ts.createSourceFile(abs, prepared.code, ts.ScriptTarget.Latest, true, prepared.scriptKind);
+    const ch = churn.get(relPath);
     nodes.push({
       key: fileKey,
       kind: 'file',
@@ -119,10 +148,17 @@ export function scanRepo(opts: ScanOptions): ScanResult {
       signature: null,
       description: card(relPath, module, null, null, fileLeadingComment(prepared.code)),
       contentHash: sha(relPath + text),
+      // File-level metrics: LOC + whole-file cyclomatic (Σ decision points). fan-in/out + health are
+      // filled after the edge graph is built; churn/has_test are known now.
+      metrics: {
+        loc: fileLoc(sf),
+        cyclomatic: cyclomaticComplexity(sf),
+        churnCommits: ch?.commits ?? 0,
+        churnDays: ch?.days ?? 0,
+        hasTest: testedBases.has(stripSourceExt(relPath)),
+      },
     });
     pushMember(moduleMembers, module, fileKey);
-
-    const sf = ts.createSourceFile(abs, prepared.code, ts.ScriptTarget.Latest, true, prepared.scriptKind);
     for (const stmt of sf.statements) {
       if (ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier)) {
         const spec = stmt.moduleSpecifier.text;
@@ -171,7 +207,7 @@ export function scanRepo(opts: ScanOptions): ScanResult {
         defaultNameByFile.set(relPath, stmt.name.text);
       }
       for (const sym of declaredSymbols(stmt, sf)) {
-        addSymbol(relPath, module, sym.name, sym.kind, sym.signature, sym.doc);
+        addSymbol(relPath, module, sym.name, sym.kind, sym.signature, sym.doc, { loc: sym.loc, cyclomatic: sym.cyclomatic });
       }
     }
     const freeUses = collectFreeUses(sf); // scope-aware free + member-call usages → calls edges below
@@ -302,7 +338,44 @@ export function scanRepo(opts: ScanOptions): ScanResult {
     }));
   const features: FeatureSpec[] = [...moduleFeatures, ...componentFeatures];
 
-  return { repo: opts.repo, ref: opts.ref ?? 'workdir', nodes, edges, features };
+  // --- Code-health (P1): fan-in/out from the edge set + smells + per-file health. Deterministic.
+  const fileOf = (key: string) => (key.includes('#') ? key.slice(0, key.indexOf('#')) : key);
+  const addTo = (m: Map<string, Set<string>>, k: string, v: string) => { const s = m.get(k) ?? new Set<string>(); s.add(v); m.set(k, s); };
+  const symFanIn = new Map<string, Set<string>>();   // symbol → distinct callers
+  const fileFanInSet = new Map<string, Set<string>>(); // file → distinct importers + callers of its symbols
+  const fanOutSet = new Map<string, Set<string>>();    // node → distinct intra-repo calls/imports out
+  for (const e of edges) {
+    if (e.kind === 'calls') { addTo(symFanIn, e.dstKey, e.srcKey); addTo(fileFanInSet, fileOf(e.dstKey), e.srcKey); }
+    if (e.kind === 'imports') addTo(fileFanInSet, e.dstKey, e.srcKey);
+    if (e.kind === 'calls' || e.kind === 'imports') addTo(fanOutSet, e.srcKey, e.dstKey);
+  }
+  const symCount = new Map<string, number>();
+  for (const n of nodes) if (n.kind === 'symbol') symCount.set(n.path, (symCount.get(n.path) ?? 0) + 1);
+
+  const metricList: ArtifactMetric[] = [];
+  for (const n of nodes) {
+    if (n.kind === 'module') continue;
+    const isFile = n.kind === 'file';
+    const fanIn = (isFile ? fileFanInSet.get(n.key) : symFanIn.get(n.key))?.size ?? 0;
+    const fanOut = fanOutSet.get(n.key)?.size ?? 0;
+    n.metrics = { ...(n.metrics ?? {}), fanIn, fanOut };
+    metricList.push({
+      key: n.key, kind: n.kind, symbolKind: n.symbolKind,
+      loc: n.metrics.loc ?? 0,
+      cyclomatic: n.metrics.cyclomatic ?? 1,
+      fanIn, fanOut,
+      churnCommits: n.metrics.churnCommits ?? 0,
+      hasTest: n.metrics.hasTest ?? !isFile, // has_test only meaningful for files; symbols neutral
+      symbolCount: isFile ? (symCount.get(n.path) ?? 0) : undefined,
+    });
+  }
+  const smells = detectSmells(metricList);
+  // Attribute each smell's score to its file (symbol smells → containing file) → per-file health.
+  const fileScores = new Map<string, number[]>();
+  for (const s of smells) { const f = fileOf(s.artifactKey); const a = fileScores.get(f) ?? []; a.push(s.score); fileScores.set(f, a); }
+  for (const n of nodes) if (n.kind === 'file') n.metrics = { ...(n.metrics ?? {}), health: healthFromSmells(fileScores.get(n.key) ?? []) };
+
+  return { repo: opts.repo, ref: opts.ref ?? 'workdir', nodes, edges, features, smells };
 }
 
 // --- helpers ---
@@ -425,19 +498,26 @@ interface SymInfo {
   signature: string;
   doc: string;
   kind: string;
+  loc: number;
+  cyclomatic: number;
 }
 function declaredSymbols(stmt: ts.Statement, sf: ts.SourceFile): SymInfo[] {
   const doc = leadingComment(sf.text, stmt.getFullStart());
   const sig = firstLine(sf.text.slice(stmt.getStart(sf), stmt.getEnd()));
-  if (ts.isFunctionDeclaration(stmt) && stmt.name) return [{ name: stmt.name.text, signature: sig, doc, kind: 'function' }];
-  if (ts.isClassDeclaration(stmt) && stmt.name) return [{ name: stmt.name.text, signature: sig, doc, kind: 'class' }];
-  if (ts.isInterfaceDeclaration(stmt)) return [{ name: stmt.name.text, signature: `interface ${stmt.name.text}`, doc, kind: 'interface' }];
-  if (ts.isTypeAliasDeclaration(stmt)) return [{ name: stmt.name.text, signature: `type ${stmt.name.text}`, doc, kind: 'type' }];
-  if (ts.isEnumDeclaration(stmt)) return [{ name: stmt.name.text, signature: `enum ${stmt.name.text}`, doc, kind: 'enum' }];
+  if (ts.isFunctionDeclaration(stmt) && stmt.name) return [{ name: stmt.name.text, signature: sig, doc, kind: 'function', loc: nodeLoc(stmt, sf), cyclomatic: cyclomaticComplexity(stmt) }];
+  if (ts.isClassDeclaration(stmt) && stmt.name) return [{ name: stmt.name.text, signature: sig, doc, kind: 'class', loc: nodeLoc(stmt, sf), cyclomatic: cyclomaticComplexity(stmt) }];
+  if (ts.isInterfaceDeclaration(stmt)) return [{ name: stmt.name.text, signature: `interface ${stmt.name.text}`, doc, kind: 'interface', loc: nodeLoc(stmt, sf), cyclomatic: 1 }];
+  if (ts.isTypeAliasDeclaration(stmt)) return [{ name: stmt.name.text, signature: `type ${stmt.name.text}`, doc, kind: 'type', loc: nodeLoc(stmt, sf), cyclomatic: 1 }];
+  if (ts.isEnumDeclaration(stmt)) return [{ name: stmt.name.text, signature: `enum ${stmt.name.text}`, doc, kind: 'enum', loc: nodeLoc(stmt, sf), cyclomatic: 1 }];
   if (ts.isVariableStatement(stmt)) {
     return stmt.declarationList.declarations
       .filter((d) => ts.isIdentifier(d.name))
-      .map((d) => ({ name: (d.name as ts.Identifier).text, signature: firstLine(sf.text.slice(d.getStart(sf), d.getEnd())), doc, kind: 'var' }));
+      .map((d) => {
+        // complexity of a `const x = () => {…}` / `function(){…}` initializer; plain values → 1.
+        const init = d.initializer;
+        const cyclomatic = init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) ? cyclomaticComplexity(init) : 1;
+        return { name: (d.name as ts.Identifier).text, signature: firstLine(sf.text.slice(d.getStart(sf), d.getEnd())), doc, kind: 'var', loc: nodeLoc(d, sf), cyclomatic };
+      });
   }
   return [];
 }

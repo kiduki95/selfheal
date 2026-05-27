@@ -63,6 +63,12 @@ export function isDeclarationFile(name: string): boolean {
   return /\.d\.[cm]?ts$/.test(name);
 }
 
+// Vendored/minified bundles (e.g. swiper-bundle.min.js) — not product code. They are giant single-line
+// files that otherwise dominate code-health smells (god_file/hotspot) with meaningless metrics. Exclude.
+export function isVendoredFile(name: string): boolean {
+  return /\.(min|bundle)\.[cm]?[jt]sx?$/.test(name);
+}
+
 // Test/spec files — excluded from the artifact graph (they are not product surface).
 export function isTestSourceFile(path: string): boolean {
   return /\.(test|spec)\.[cm]?[jt]sx?$/.test(path);

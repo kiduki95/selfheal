@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scanRepo, type EdgeSpec } from '../src/codeflow/scan.js';
-import { isCodeFile, isDeclarationFile, isTestSourceFile, scriptKindFor, resolveCandidates, prepareSource } from '../src/codeflow/languages.js';
+import { isCodeFile, isDeclarationFile, isTestSourceFile, isVendoredFile, scriptKindFor, resolveCandidates, prepareSource } from '../src/codeflow/languages.js';
 import { extractCommonJs } from '../src/codeflow/commonjs.js';
 import ts from 'typescript';
 
@@ -80,6 +80,10 @@ describe('language registry (F1)', () => {
     expect(isDeclarationFile('a.d.ts')).toBe(true);
     expect(isDeclarationFile('a.d.mts')).toBe(true);
     expect(isDeclarationFile('a.ts')).toBe(false);
+    // vendored/minified bundles are excluded from the graph (code-health noise).
+    expect(isVendoredFile('swiper-bundle.min.js')).toBe(true);
+    expect(isVendoredFile('app.bundle.js')).toBe(true);
+    expect(isVendoredFile('app.js')).toBe(false);
   });
   it('picks ScriptKind per extension (JSX for .jsx, JS for plain .js)', () => {
     expect(scriptKindFor('a.tsx')).toBe(ts.ScriptKind.TSX);

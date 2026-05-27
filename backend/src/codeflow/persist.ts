@@ -13,6 +13,7 @@ export interface PersistStats {
   nodes: number;
   edges: number;
   features: number;
+  smells: number;
   byKind: Record<string, number>;
 }
 
@@ -27,8 +28,9 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
     // Whole destructive rebuild (DELETE + re-INSERT of nodes/edges/features) runs in ONE transaction
     // so a mid-scan failure rolls back to the prior graph instead of leaving the repo half-wiped.
     // The codeflow_runs row stays on the pool (outside the tx) so its status survives a rollback.
-    const { edgeCount, byKind } = await db.transaction(async (tx) => {
+    const { edgeCount, byKind, smellCount } = await db.transaction(async (tx) => {
     // 전체 재수집: repo 범위 초기화 (FK: code_edges → code_artifact_registry)
+    await tx.query(`DELETE FROM code_smells WHERE repo = $1`, [scan.repo]); // FK → code_artifact_registry
     await tx.query(`DELETE FROM code_edges WHERE repo = $1`, [scan.repo]);
     await tx.query(`DELETE FROM code_artifact_registry WHERE repo = $1`, [scan.repo]);
     // 이 repo의 code-derived feature도 초기화 (review-emergent gap은 보존)
@@ -40,12 +42,15 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
     for (const n of scan.nodes) {
       const { vector } = await embedder.embed(n.description);
       const risk = classifyCodeRisk(n.path, n.module, n.symbol, n.signature);
+      const m = n.metrics ?? {};
       const rows = await tx.query<{ id: string }>(
         `INSERT INTO code_artifact_registry
-           (repo, path, module, symbol, kind, signature, content_hash, description, embedding, risk_tier, risk_score)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::vector,$10,$11)
+           (repo, path, module, symbol, kind, signature, content_hash, description, embedding, risk_tier, risk_score,
+            loc, cyclomatic, fan_in, fan_out, churn_commits, churn_days, has_test, health_score)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::vector,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
          RETURNING id`,
-        [scan.repo, n.path, n.module, n.symbol, n.kind, n.signature, n.contentHash, n.description, toSqlVector(vector), risk.tier, risk.score],
+        [scan.repo, n.path, n.module, n.symbol, n.kind, n.signature, n.contentHash, n.description, toSqlVector(vector), risk.tier, risk.score,
+         m.loc ?? null, m.cyclomatic ?? null, m.fanIn ?? null, m.fanOut ?? null, m.churnCommits ?? null, m.churnDays ?? null, m.hasTest ?? null, m.health ?? null],
       );
       idByKey.set(n.key, rows[0]!.id);
       byKind[n.kind] = (byKind[n.kind] ?? 0) + 1;
@@ -63,6 +68,19 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
         [scan.repo, src, dst, e.kind],
       );
       edgeCount++;
+    }
+
+    // 2b) code_smells (code-health P1) — map artifact key → id, insert detected smells.
+    let smellCount = 0;
+    for (const s of scan.smells) {
+      const artifactId = idByKey.get(s.artifactKey);
+      if (!artifactId) continue; // smell on an artifact we didn't persist → skip (defensive)
+      await tx.query(
+        `INSERT INTO code_smells (repo, artifact_id, kind, severity, score, evidence)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
+        [scan.repo, artifactId, s.kind, s.severity, s.score, JSON.stringify(s.evidence)],
+      );
+      smellCount++;
     }
 
     // 3) feature(코드 파생) upsert (+② enrich) + 멤버에 feature_id 누적 + parent_id 트리
@@ -131,14 +149,14 @@ export async function persistScan(scan: ScanResult, db: Db, embedder: EmbeddingC
     }
     if (enriched) console.log(`  ② enriched ${enriched} component features (user-facing labels)`);
     if (subCount) console.log(`  ① decomposed into ${subCount} sub-features`);
-    return { edgeCount, byKind };
+    return { edgeCount, byKind, smellCount };
     }); // end transaction — graph fully swapped or fully rolled back
 
     await db.query(
       `UPDATE codeflow_runs SET status='done', nodes_total=$2, edges_total=$3, features_total=$4, finished_at=now() WHERE id=$1`,
       [runId, scan.nodes.length, edgeCount, scan.features.length],
     );
-    return { nodes: scan.nodes.length, edges: edgeCount, features: scan.features.length, byKind };
+    return { nodes: scan.nodes.length, edges: edgeCount, features: scan.features.length, smells: smellCount, byKind };
   } catch (e) {
     await db.query(`UPDATE codeflow_runs SET status='failed', finished_at=now() WHERE id=$1`, [runId]);
     throw e;
