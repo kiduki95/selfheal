@@ -3,8 +3,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scanRepo, type EdgeSpec } from '../src/codeflow/scan.js';
-import { isCodeFile, isDeclarationFile, isTestSourceFile, scriptKindFor, resolveCandidates } from '../src/codeflow/languages.js';
+import { isCodeFile, isDeclarationFile, isTestSourceFile, scriptKindFor, resolveCandidates, prepareSource } from '../src/codeflow/languages.js';
+import { extractCommonJs } from '../src/codeflow/commonjs.js';
 import ts from 'typescript';
+
+const srcFile = (code: string, name = 'm.js') => ts.createSourceFile(name, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 
 // No DB needed — scanRepo is a pure filesystem→graph function. Fixtures exercise the calls-edge
 // resolution: named imports, default imports, and local-shadowing (B1, deferred review finding).
@@ -71,9 +74,8 @@ describe('codeflow scan calls edges', () => {
 
 // F1: language registry helpers (pure, no DB/FS).
 describe('language registry (F1)', () => {
-  it('recognizes the JS/TS family but not .vue/.d.ts', () => {
-    for (const f of ['a.ts', 'a.tsx', 'a.js', 'a.jsx', 'a.mjs', 'a.cjs']) expect(isCodeFile(f)).toBe(true);
-    expect(isCodeFile('a.vue')).toBe(false);
+  it('recognizes the JS/TS family + .vue, but not .css/.d.ts', () => {
+    for (const f of ['a.ts', 'a.tsx', 'a.js', 'a.jsx', 'a.mjs', 'a.cjs', 'a.vue']) expect(isCodeFile(f)).toBe(true);
     expect(isCodeFile('a.css')).toBe(false);
     expect(isDeclarationFile('a.d.ts')).toBe(true);
     expect(isDeclarationFile('a.d.mts')).toBe(true);
@@ -128,5 +130,119 @@ describe('codeflow scan — JS/JSX family (F1)', () => {
   it('resolves an ext-less import + call across .jsx → .js', () => {
     const c = calls(scanRepo({ rootDir: jsRoot, repo: 'test/js' }).edges);
     expect(c.has('client/views/Panel.jsx->client/lib/math.js#add')).toBe(true);
+  });
+});
+
+// CommonJS extraction (pure AST → facts).
+describe('extractCommonJs', () => {
+  it('captures require specifiers + the local binding name', () => {
+    const x = extractCommonJs(srcFile(`const a = require('./m'); var b = require('pkg'); require('./side');`));
+    expect(x.requires).toEqual([
+      { local: 'a', spec: './m' },
+      { local: 'b', spec: 'pkg' },
+      { local: null, spec: './side' },
+    ]);
+  });
+  it('captures module.exports.X / exports.X as named symbols with kind', () => {
+    const x = extractCommonJs(srcFile(`module.exports.getUser = function () {}; exports.Helper = class {}; module.exports.flag = 1;`));
+    expect(x.exports.find((e) => e.name === 'getUser')?.kind).toBe('function');
+    expect(x.exports.find((e) => e.name === 'Helper')?.kind).toBe('class');
+    expect(x.exports.find((e) => e.name === 'flag')?.kind).toBe('var');
+  });
+  it('module.exports = { a, b } → each key a symbol; named function → defaultExportName', () => {
+    expect(extractCommonJs(srcFile(`module.exports = { alpha, beta };`)).exports.map((e) => e.name).sort()).toEqual(['alpha', 'beta']);
+    const named = extractCommonJs(srcFile(`module.exports = function Router() {};`));
+    expect(named.defaultExportName).toBe('Router');
+    expect(named.exports.some((e) => e.name === 'Router')).toBe(true);
+    expect(extractCommonJs(srcFile(`const Svc = {}; module.exports = Svc;`)).defaultExportName).toBe('Svc');
+  });
+});
+
+// .vue <script> extraction (prepareSource seam).
+describe('prepareSource (.vue)', () => {
+  it('extracts the <script> block as JS and keeps the full SFC as uiText', () => {
+    const sfc = `<template><h1>Map</h1></template>\n<script>\nimport X from './x';\nexport default { name: 'MapView' };\n</script>\n<style>.a{}</style>`;
+    const p = prepareSource('client/src/views/MapView.vue', sfc);
+    expect(p.scriptKind).toBe(ts.ScriptKind.JS);
+    expect(p.code).toContain(`export default { name: 'MapView' }`);
+    expect(p.code).not.toContain('<template>');
+    expect(p.uiText).toBe(sfc); // template still available for UI-surface extraction
+  });
+  it('honors lang="ts" and passes non-vue files through unchanged', () => {
+    expect(prepareSource('A.vue', `<script lang="ts">export default {}</script>`).scriptKind).toBe(ts.ScriptKind.TS);
+    const pass = prepareSource('a.ts', `export const x = 1;`);
+    expect(pass.code).toBe('export const x = 1;');
+    expect(pass.scriptKind).toBe(ts.ScriptKind.TS);
+  });
+});
+
+// CommonJS + .vue at the scan level (the kiduki-gcs shapes).
+describe('codeflow scan — CommonJS + Vue (coverage)', () => {
+  let root: string;
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'codeflow-cjs-'));
+    mkdirSync(join(root, 'server', 'services'), { recursive: true });
+    mkdirSync(join(root, 'server', 'routes'), { recursive: true });
+    mkdirSync(join(root, 'client', 'views'), { recursive: true });
+    // CJS module exporting named functions.
+    writeFileSync(join(root, 'server', 'services', 'user.service.js'), `module.exports.getUser = function (id) { return id; };\nmodule.exports.saveUser = function (u) { return u; };\n`);
+    // CJS consumer: require + namespace member calls.
+    writeFileSync(
+      join(root, 'server', 'routes', 'users.route.js'),
+      `var svc = require('../services/user.service');\nfunction handler(req) { return svc.getUser(req.id); }\nmodule.exports = handler;\n`,
+    );
+    // Vue SFC (Options API) importing a relative .js.
+    writeFileSync(
+      join(root, 'client', 'views', 'MapView.vue'),
+      `<template>\n  <h1>Mission Map</h1>\n</template>\n<script>\nimport user from '../../server/services/user.service';\nexport default { name: 'MapView', methods: {} };\n</script>\n`,
+    );
+    // Shadowing: top-level `svc` binds user.service (which HAS getUser), but a function-local `svc`
+    // shadows it and calls getUser on the LOCAL object → must NOT emit a calls edge to user.service#getUser.
+    writeFileSync(
+      join(root, 'server', 'routes', 'shadow.route.js'),
+      `var svc = require('../services/user.service');\nfunction handler() { const svc = { getUser() { return 1; } }; return svc.getUser(); }\nmodule.exports = handler;\n`,
+    );
+    // Vue 3 dual-block SFC: <script setup> (imports) + <script> (Options export default). The component
+    // symbol lives in the SECOND block — both must be parsed.
+    writeFileSync(
+      join(root, 'client', 'views', 'DronePanel.vue'),
+      `<template>\n  <h1>Drone Panel</h1>\n</template>\n<script setup>\nimport user from '../../server/services/user.service';\n</script>\n<script>\nexport default { name: 'DronePanel' };\n</script>\n`,
+    );
+  });
+  afterAll(() => { if (root) rmSync(root, { recursive: true, force: true }); });
+
+  it('CJS: require → imports edge, module.exports.X → symbols', () => {
+    const scan = scanRepo({ rootDir: root, repo: 'test/cjs' });
+    expect(scan.nodes.some((n) => n.symbol === 'getUser')).toBe(true);
+    expect(scan.nodes.some((n) => n.symbol === 'saveUser')).toBe(true);
+    const imports = new Set(scan.edges.filter((e) => e.kind === 'imports').map((e) => `${e.srcKey}->${e.dstKey}`));
+    expect(imports.has('server/routes/users.route.js->server/services/user.service.js')).toBe(true);
+  });
+
+  it('CJS: best-effort member call svc.getUser() → user.service#getUser', () => {
+    const c = calls(scanRepo({ rootDir: root, repo: 'test/cjs' }).edges);
+    expect(c.has('server/routes/users.route.js->server/services/user.service.js#getUser')).toBe(true);
+  });
+
+  it('Vue: SFC yields a file node, a component symbol, and a UI surface', () => {
+    const scan = scanRepo({ rootDir: root, repo: 'test/cjs' });
+    expect(scan.nodes.some((n) => n.path === 'client/views/MapView.vue' && n.kind === 'file')).toBe(true);
+    expect(scan.nodes.some((n) => n.path === 'client/views/MapView.vue' && n.symbol === 'MapView')).toBe(true);
+    const fileNode = scan.nodes.find((n) => n.path === 'client/views/MapView.vue' && n.kind === 'file');
+    // uiSurface is carried on component features; assert the heading was harvested from <template>.
+    const feat = scan.features.find((f) => f.fileKey === 'client/views/MapView.vue');
+    expect(feat?.uiSurface ?? '').toContain('Mission Map');
+    expect(fileNode).toBeTruthy();
+  });
+
+  it('CJS: a function-local shadow of a require-binding does NOT emit a false member-call edge', () => {
+    const c = calls(scanRepo({ rootDir: root, repo: 'test/cjs' }).edges);
+    // svc.getUser() inside handler() targets the LOCAL object, not the top-level user.service binding.
+    expect(c.has('server/routes/shadow.route.js->server/services/user.service.js#getUser')).toBe(false);
+  });
+
+  it('Vue: dual-block SFC (<script setup> + <script>) still finds the Options component symbol', () => {
+    const scan = scanRepo({ rootDir: root, repo: 'test/cjs' });
+    expect(scan.nodes.some((n) => n.path === 'client/views/DronePanel.vue' && n.symbol === 'DronePanel')).toBe(true);
   });
 });

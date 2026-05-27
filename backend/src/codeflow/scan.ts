@@ -2,7 +2,8 @@ import ts from 'typescript';
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, relative, dirname, sep } from 'node:path';
-import { isCodeFile, isDeclarationFile, isTestSourceFile, scriptKindFor, resolveCandidates, stripSourceExt } from './languages.js';
+import { isCodeFile, isDeclarationFile, isTestSourceFile, prepareSource, resolveCandidates, stripSourceExt } from './languages.js';
+import { extractCommonJs } from './commonjs.js';
 
 // codeflow T1 parse (codeflow-layer.md §4) — TypeScript Compiler API로 결정론 추출 (Claude 0).
 // tree-sitter 대신 이미 있는 `typescript` 의존성 사용 → 네이티브 빌드 없이 크로스플랫폼.
@@ -79,16 +80,35 @@ export function scanRepo(opts: ScanOptions): ScanResult {
   // refer to an outer/import binding. Scope-aware (vs a flat name set) so a local that shadows an
   // import suppresses only the calls in its own scope, not a same-named import use in a sibling scope.
   const usedNames = new Map<string, Set<string>>();
+  // Namespace bindings (file → local → target module): CJS `const x = require('./m')` and ES
+  // `import * as x from './m'`. A member call `x.method()` resolves to `m#method` (best-effort).
+  const nsBindings = new Map<string, Map<string, string>>();
+  const memberCallsByFile = new Map<string, { root: string; method: string }[]>();
+  // All symbol keys added (ES + CJS + Vue component) — dedupe so the same symbol isn't emitted twice.
+  const symKeysAdded = new Set<string>();
+  const addSymbol = (path: string, mod: string, name: string, kind: string, signature: string, doc: string) => {
+    const symKey = `${path}#${name}`;
+    if (symKeysAdded.has(symKey)) return;
+    symKeysAdded.add(symKey);
+    nodes.push({
+      key: symKey, kind: 'symbol', path, module: mod, symbol: name, symbolKind: kind,
+      signature, description: card(path, mod, name, signature, doc), contentHash: sha(symKey + signature),
+    });
+    edges.push({ srcKey: path, dstKey: symKey, kind: 'contains' });
+    pushMember(moduleMembers, mod, symKey);
+  };
 
   for (const abs of files) {
     const relPath = toPosix(relative(root, abs));
     const module = moduleOf(toPosix(relative(root, dirname(abs))));
     moduleSet.add(module);
     const text = readFileSync(abs, 'utf8');
+    // For .vue, `code` is the extracted <script> and `uiText` is the whole SFC (template feeds UI surface).
+    const prepared = prepareSource(abs, text);
     const fileKey = relPath;
     fileKeyByPath.set(relPath, fileKey);
     fileModule.set(fileKey, module);
-    uiSurfaceByFile.set(fileKey, extractUiSurface(text));
+    uiSurfaceByFile.set(fileKey, extractUiSurface(prepared.uiText));
 
     nodes.push({
       key: fileKey,
@@ -97,12 +117,12 @@ export function scanRepo(opts: ScanOptions): ScanResult {
       module,
       symbol: null,
       signature: null,
-      description: card(relPath, module, null, null, fileLeadingComment(text)),
+      description: card(relPath, module, null, null, fileLeadingComment(prepared.code)),
       contentHash: sha(relPath + text),
     });
     pushMember(moduleMembers, module, fileKey);
 
-    const sf = ts.createSourceFile(abs, text, ts.ScriptTarget.Latest, true, scriptKindFor(abs));
+    const sf = ts.createSourceFile(abs, prepared.code, ts.ScriptTarget.Latest, true, prepared.scriptKind);
     for (const stmt of sf.statements) {
       if (ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier)) {
         const spec = stmt.moduleSpecifier.text;
@@ -122,6 +142,12 @@ export function scanRepo(opts: ScanOptions): ScanResult {
             dbinds.set(clause.name.text, toRel);
             defaultBindings.set(relPath, dbinds);
           }
+          // Capture namespace import `import * as ns from './m'` → ns.method() resolves to m#method.
+          if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
+            const ns = nsBindings.get(relPath) ?? new Map<string, string>();
+            ns.set(clause.namedBindings.name.text, toRel);
+            nsBindings.set(relPath, ns);
+          }
         }
         continue;
       }
@@ -129,31 +155,45 @@ export function scanRepo(opts: ScanOptions): ScanResult {
       // Limitation: `export default Foo` where Foo is a non-exported local creates no symbol node, so the
       // default-import edge won't resolve (guarded by nodeKeySet below — degrades to a missing edge, never
       // a dangling one). The common `export default function/class Foo` form (below) does resolve.
-      if (ts.isExportAssignment(stmt) && !stmt.isExportEquals && ts.isIdentifier(stmt.expression)) {
-        defaultNameByFile.set(relPath, stmt.expression.text);
+      if (ts.isExportAssignment(stmt) && !stmt.isExportEquals) {
+        if (ts.isIdentifier(stmt.expression)) {
+          defaultNameByFile.set(relPath, stmt.expression.text);
+        } else if (ts.isObjectLiteralExpression(stmt.expression)) {
+          // `export default { name: 'X', ... }` — Vue SFC Options API. Anchor a component symbol on the
+          // `name` field, else the PascalCased file name, so the component is a first-class feature node.
+          const compName = objectLiteralName(stmt.expression) ?? pascalFromPath(relPath);
+          defaultNameByFile.set(relPath, compName);
+          addSymbol(relPath, module, compName, 'class', `component ${compName}`, fileLeadingComment(prepared.code));
+        }
       }
       if (!isExported(stmt)) continue;
       if (hasDefaultModifier(stmt) && (ts.isFunctionDeclaration(stmt) || ts.isClassDeclaration(stmt)) && stmt.name) {
         defaultNameByFile.set(relPath, stmt.name.text);
       }
       for (const sym of declaredSymbols(stmt, sf)) {
-        const symKey = `${relPath}#${sym.name}`;
-        nodes.push({
-          key: symKey,
-          kind: 'symbol',
-          path: relPath,
-          module,
-          symbol: sym.name,
-          symbolKind: sym.kind,
-          signature: sym.signature,
-          description: card(relPath, module, sym.name, sym.signature, sym.doc),
-          contentHash: sha(symKey + sym.signature),
-        });
-        edges.push({ srcKey: fileKey, dstKey: symKey, kind: 'contains' });
-        pushMember(moduleMembers, module, symKey);
+        addSymbol(relPath, module, sym.name, sym.kind, sym.signature, sym.doc);
       }
     }
-    usedNames.set(relPath, collectFreeUses(sf)); // free call/JSX/new usages → calls edges below
+    const freeUses = collectFreeUses(sf); // scope-aware free + member-call usages → calls edges below
+    usedNames.set(relPath, freeUses.free);
+    memberCallsByFile.set(relPath, freeUses.memberCalls); // scope-aware root.method() → namespace member-call edges
+
+    // CommonJS pass (disjoint from the ES constructs handled above): require() → import edges + namespace
+    // bindings; module.exports / module.exports.X / exports.X → exported symbols. A file is normally either
+    // ESM or CJS, so running both passes is safe (addSymbol dedupes by key either way).
+    const cjs = extractCommonJs(sf);
+    for (const r of cjs.requires) {
+      if (!r.spec.startsWith('.') && !r.spec.startsWith('@/')) continue; // intra-repo targets only
+      const toRel = resolveImport(relPath, r.spec);
+      importPairs.push({ fromFile: relPath, toRel });
+      if (r.local) {
+        const ns = nsBindings.get(relPath) ?? new Map<string, string>();
+        ns.set(r.local, toRel);
+        nsBindings.set(relPath, ns);
+      }
+    }
+    for (const e of cjs.exports) addSymbol(relPath, module, e.name, e.kind, e.signature, '');
+    if (cjs.defaultExportName && !defaultNameByFile.has(relPath)) defaultNameByFile.set(relPath, cjs.defaultExportName);
   }
 
   // module 노드 + module→file contains
@@ -202,6 +242,26 @@ export function scanRepo(opts: ScanOptions): ScanResult {
         if (dstFile && dstFile !== fromFile && defName) dstKey = `${dstFile}#${defName}`;
       }
       if (!dstKey || !nodeKeySet.has(dstKey)) continue; // only intra-repo exported symbols we tracked
+      const sig = `${fromFile}->${dstKey}`;
+      if (callSeen.has(sig)) continue;
+      callSeen.add(sig);
+      edges.push({ srcKey: fromFile, dstKey, kind: 'calls' });
+    }
+  }
+
+  // Member-call edges (best-effort): `ns.method()` where `ns` is a namespace binding (CJS require or ES
+  // `import * as`) → `module#method`. Guarded by nodeKeySet, so an unresolved method never yields a false
+  // edge. This recovers the CJS blast-radius the ES-only free-use pass can't (module.exports.x callers).
+  for (const [fromFile, calls] of memberCallsByFile) {
+    const ns = nsBindings.get(fromFile);
+    if (!ns) continue;
+    for (const { root, method } of calls) {
+      const toRel = ns.get(root);
+      if (!toRel) continue;
+      const dstFile = resolveToFileKey(toRel, fileKeyByPath);
+      if (!dstFile || dstFile === fromFile) continue;
+      const dstKey = `${dstFile}#${method}`;
+      if (!nodeKeySet.has(dstKey)) continue;
       const sig = `${fromFile}->${dstKey}`;
       if (callSeen.has(sig)) continue;
       callSeen.add(sig);
@@ -296,7 +356,10 @@ function declaredInScope(scopeNode: ts.Node): Set<string> {
     if (!isRoot && isFunctionScope(node)) return; // stop at nested function boundary
     if (ts.isFunctionDeclaration(node) && node.name) names.add(node.name.text);
     else if (ts.isClassDeclaration(node) && node.name) names.add(node.name.text);
-    else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) names.add(node.name.text);
+    // `const x = require('m')` is an import, not a local — treat it like an ES import binding (free at inner
+    // scopes) so a namespace member call `x.method()` resolves, while a genuine local re-declaration of the
+    // same name (object/param/non-require) still shadows it.
+    else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && !isRequireCall(node.initializer)) names.add(node.name.text);
     else if (ts.isParameter(node) && ts.isIdentifier(node.name)) names.add(node.name.text);
     else if (ts.isBindingElement(node) && ts.isIdentifier(node.name)) names.add(node.name.text);
     ts.forEachChild(node, (c) => collect(c, false));
@@ -304,12 +367,27 @@ function declaredInScope(scopeNode: ts.Node): Set<string> {
   collect(scopeNode, true);
   return names;
 }
+// Is `node` a `require(...)` call? (CJS namespace bindings are imports, not locals — see declaredInScope.)
+function isRequireCall(node: ts.Expression | undefined): boolean {
+  return !!node && ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'require';
+}
 // Scope-aware free-use collection: an identifier called / instantiated / rendered (JSX) is "free"
 // when it is NOT bound anywhere in its enclosing scope chain, so it must refer to an import (or an
 // outer binding). This is what lets a local that shadows an import suppress only its own scope's
 // calls while a same-named import use in a sibling scope still yields a calls edge.
-function collectFreeUses(sf: ts.SourceFile): Set<string> {
+//
+// Also returns scope-aware MEMBER calls `root.method()` where `root` is free — the input to namespace
+// (CJS require / ES `import * as`) member-call resolution. Collecting these here (not in a separate flat
+// walk) is what keeps a local `const svc = …` from yielding a false `svc.method()` edge to the module a
+// top-level `svc` binding points at.
+interface FreeUses {
+  free: Set<string>;
+  memberCalls: { root: string; method: string }[];
+}
+function collectFreeUses(sf: ts.SourceFile): FreeUses {
   const free = new Set<string>();
+  const memberCalls: { root: string; method: string }[] = [];
+  const mcSeen = new Set<string>();
   const rootId = (e: ts.Expression): string | null =>
     ts.isIdentifier(e) ? e.text : ts.isPropertyAccessExpression(e) ? rootId(e.expression) : null;
   const boundInChain = (chain: Set<string>[], name: string): boolean => chain.some((s) => s.has(name));
@@ -320,7 +398,15 @@ function collectFreeUses(sf: ts.SourceFile): Set<string> {
       if (!isScopeRoot && isFunctionScope(node)) { walkScope(node, chain); return; } // descend via own scope
       if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
         const id = rootId(node.expression);
-        if (id && !boundInChain(chain, id)) free.add(id);
+        if (id && !boundInChain(chain, id)) {
+          free.add(id);
+          // `id.method(...)` with a free root → namespace member-call candidate (scope-aware).
+          if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && ts.isIdentifier(node.expression.expression)) {
+            const method = node.expression.name.text;
+            const key = `${id}.${method}`;
+            if (!mcSeen.has(key)) { mcSeen.add(key); memberCalls.push({ root: id, method }); }
+          }
+        }
       } else if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
         const tag = node.tagName;
         const id = ts.isIdentifier(tag) ? tag.text : ts.isPropertyAccessExpression(tag) ? rootId(tag) : null;
@@ -331,7 +417,7 @@ function collectFreeUses(sf: ts.SourceFile): Set<string> {
     visit(scopeNode, true);
   };
   walkScope(sf, []);
-  return free;
+  return { free, memberCalls };
 }
 
 interface SymInfo {
@@ -398,6 +484,23 @@ function firstLine(s: string): string {
 }
 function card(path: string, module: string, symbol: string | null, signature: string | null, doc: string): string {
   return [path, module, symbol, signature, doc].filter(Boolean).join(' · ');
+}
+// `export default { name: 'X', ... }` → the string value of the `name` property, if present (Vue SFC).
+function objectLiteralName(obj: ts.ObjectLiteralExpression): string | null {
+  for (const p of obj.properties) {
+    if (ts.isPropertyAssignment(p) && p.name && ts.isIdentifier(p.name) && p.name.text === 'name' && ts.isStringLiteralLike(p.initializer)) {
+      return p.initializer.text;
+    }
+  }
+  return null;
+}
+// Fallback component name from a file path: 'client/src/views/MapView.vue' → 'MapView'; 'foo/index.vue' →
+// 'Foo' (parent dir). PascalCased so it reads as a component and passes isFeatureWorthy.
+function pascalFromPath(relPath: string): string {
+  const parts = toPosix(relPath).split('/');
+  const base = parts.pop()!.replace(/\.[^.]+$/, '');
+  const name = base === 'index' ? (parts.pop() ?? base) : base;
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 function resolveImport(fromRel: string, spec: string): string {
   if (spec.startsWith('@/')) return stripSourceExt(spec.slice(2)); // tsconfig paths: @/* → 루트상대
