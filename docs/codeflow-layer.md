@@ -51,11 +51,12 @@ const risk = classifyCodeRisk(c.path, c.module, c.symbol, c.desc);              
 > **churn**(git 이력, best-effort 주입)·test-presence. 임계값 기반 smell 3종 — **god_file**(거대·복잡 파일),
 > **complex_function**(분기 과다 함수; 클래스는 메서드 합산이라 제외), **untested_hotspot**(churn×complexity×fan-in,
 > 테스트 0 — CodeScene 핫스팟 테제, 이자율 최고 부채). 파일별 0–100 **health_score**. 적재: `code_artifact_registry`
-> 메트릭 컬럼 + `code_smells` 테이블(009 마이그레이션). 벤더/min 번들은 그래프에서 제외(노이즈). **단계**: P1=검출/적재(✅),
-> **P2=Insight `refactor` proposal(부채이자=오염도×churn활동, 버그우위 가중)(✅)** — 파일 단위·안정 ref_id=경로, 통일 0–100 큐에서 버그/기능과 경쟁.
-> P3=착지대 게이트(toxic 모듈 선행 refactor), P4=Auto-Dev 행위보존 검증·중복 smell. **다음(설계 격차):** smell이 *증상*(크기·복잡도)
-> 기반이라, git 이력 **co-change**(같은 커밋서 함께 변경)로 "왜 바뀌나=책임 혼재"·의존성 방향까지 보는 *책임 기반* 진단으로 심화 예정.
-> **실측**: kiduki-gcs smell 13건(drone.manager.js 4059줄→god_file critical), 자기 백엔드 dogfood도 scan.ts/db.ts god_file로 신고.
+> 메트릭 컬럼 + `code_smells` 테이블(009 마이그레이션). 벤더/min 번들은 그래프에서 제외(노이즈).
+> **변경결합(co-change, ✅)** — 증상(크기·복잡도)을 넘어 **책임/의존 기반** 진단: git 이력에서 함께 커밋되는 파일쌍(support/confidence,
+> Tornhill 논리적 결합)을 churn과 **같은 git 패스**로 뽑아, **구조적 그래프와 교차** → `hidden_coupling`(함께 바뀌나 import/call 연결 없음=암묵 의존)·
+> `boundary_coupling`(타모듈과 함께 변경=경계 누수) smell. `code_cochange` 테이블(010). refactor 제안에 **"왜 바뀌나"**(함께 변경 파일+숨은/타모듈 표시) 보강.
+> **단계**: P1 검출(✅) · P2 refactor proposal(부채이자=오염도×churn, 버그우위)(✅) · co-change 책임진단(✅) · P3 착지대 게이트(toxic 모듈 선행 refactor) · P4 Auto-Dev 행위보존 검증.
+> **실측**: kiduki-gcs smell 13건(drone.manager.js 4059줄→god_file critical), dogfood(자기 백엔드)는 scan.ts↔languages.ts를 *구조적*(거짓경보X)으로 정확 분류.
 
 ---
 
