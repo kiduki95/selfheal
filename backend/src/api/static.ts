@@ -4,8 +4,9 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ApiEnv } from './contract.js';
 
-// Static serving for the built web/ UI (Vite + React + TS → web/dist). Run `npm --prefix web run build` first.
-const WEB_DIR = fileURLToPath(new URL('../../web/dist/', import.meta.url));
+// Static serving for the built frontend UI (Vite + React + TS → frontend/dist). The frontend is a
+// sibling package (../../../frontend from this file); build it first with `cd frontend && npm run build`.
+const WEB_DIR = fileURLToPath(new URL('../../../frontend/dist/', import.meta.url));
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',

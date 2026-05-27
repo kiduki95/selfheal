@@ -4,7 +4,7 @@ import { defineConfig } from 'vitest/config';
 // Run test files serially so they don't race on DROP/CREATE DATABASE. Pure unit tests are unaffected.
 export default defineConfig({
   test: {
-    // Backend suite only. web/ has its own Playwright specs (web/tests/*.spec.ts) which vitest must
+    // Backend suite only. frontend/ has its own Playwright specs (frontend/tests/*.spec.ts) which vitest must
     // not collect — they use @playwright/test and throw if run under vitest.
     include: ['test/**/*.test.ts'],
     fileParallelism: false,

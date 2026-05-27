@@ -12,7 +12,7 @@ function elapsedSeconds(iso: string | null): number | null {
   return Math.max(0, Math.floor((Date.now() - t) / 1000));
 }
 
-// '14 min ago' style — matches web/src/data/mock-extras.ts `when`.
+// '14 min ago' style — matches frontend/src/data/mock-extras.ts `when`.
 export function toRelativeLong(iso: string | null): string {
   const s = elapsedSeconds(iso);
   if (s === null) return iso ?? '';
@@ -28,7 +28,7 @@ export function toRelativeLong(iso: string | null): string {
   return `${Math.floor(d / 365)} year${Math.floor(d / 365) > 1 ? 's' : ''} ago`;
 }
 
-// '2h' style — matches web/src/data/mock.ts GraphReview `date`.
+// '2h' style — matches frontend/src/data/mock.ts GraphReview `date`.
 export function toRelativeCompact(iso: string | null): string {
   const s = elapsedSeconds(iso);
   if (s === null) return iso ?? '';

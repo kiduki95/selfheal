@@ -11,9 +11,15 @@ Ingests user reviews, clusters them into themes, and opens PRs for the highest-i
 증거 집계)**까지 구현했다. Phase 2의 async reconciliation은 인터페이스 + purity 메트릭만(merge/split
 로직은 스펙대로 후속 — `src/processing/pipeline/reconciliation.ts`).
 
-### 빠른 시작
+### 구성 (2-패키지)
+
+`backend/`(Hono API + 파이프라인)와 `frontend/`(Vite+React UI)는 **독립 2-패키지**다(루트 package.json 없음).
+각 폴더에서 따로 `npm install`/스크립트 실행. 자세한 디렉터리 트리는 [`docs/architecture.md`](docs/architecture.md) §4.
+
+### 빠른 시작 (backend)
 
 ```bash
+cd backend
 npm install
 npm run db:up          # Docker로 Postgres 16 + pgvector 기동 (host:5433)
 npm run db:migrate     # 스펙 §5 스키마 (14테이블 + HNSW 인덱스)
@@ -23,6 +29,14 @@ npm test               # 순수 stage 단위 테스트 (DB 불필요)
 ```
 
 `npm run db:up` 후 한 번에: `npm run db:migrate && npm run seed && npm run run:corpus`.
+
+### 빠른 시작 (frontend + 풀스택 serve)
+
+```bash
+cd frontend && npm install && npm run build   # frontend/dist 생성
+cd ../backend && npm run serve                # backend Hono가 frontend/dist + /api 서빙 (PORT 5175)
+# 개발 중 UI HMR: cd frontend && npm run dev   (Vite :5173, /api → :5175 프록시)
+```
 
 ### CodeFlow (코드 그래프 producer, P0)
 
@@ -38,8 +52,9 @@ npm run codeflow:scan <repo> <rootDir>
 목표 그림: 코드에서 **모듈→기능**을 먼저 정리 → 리뷰가 들어오면 기능에 매핑(grounded) / 없으면 floating(gap)
 → Insight가 "어느 모듈에 어떻게 추가할지" 제안. 설계: `docs/codeflow-layer.md`.
 
-스캐너는 `.ts`/`.tsx` + 다중 소스루트(app/components/lib/hooks 등)를 지원하며 모듈→기능 description에
-멤버 심볼명을 넣어 매핑 판단의 재료를 준다. 매핑 대상 codebase는 `TARGET_REPO`(기본
+스캐너는 **JS/TS family**(`.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs`, `src/codeflow/languages.ts` 레지스트리) +
+다중 소스루트(app/components/lib/hooks/client/server 등)를 지원하며 모듈→기능 description에
+멤버 심볼명을 넣어 매핑 판단의 재료를 준다. (`.vue`·CommonJS 엣지는 미지원 — 한계는 `docs/codeflow-layer.md` §0.) 매핑 대상 codebase는 `TARGET_REPO`(기본
 `tete-lab/automated-trading-system`), feature는 `repo`로 스코프되어 여러 codebase가 공존.
 
 ### 파이프라인 (구현된 11 stage)
@@ -109,14 +124,19 @@ LLM_CLIENT=claude-cli npm run run:corpus            # bash
   defect code_map_rate·signal corroboration·vocab match_rate·PII compliance + **drift PSI**(런 분포를
   `metric_snapshots`에 저장, 직전 런 대비 PSI로 분포 변화 감지). `MetricsSink` 인터페이스 — OTel/Prometheus 스왑 가능.
 
-### 구조
+### backend/ 내부
 
 ```
-src/contracts/   RawReview · ProcessedReview(facts/inferences/versions) · Stage zod 스키마
-src/clients/     llm/{stub,anthropic} · embedding/{local,cohere} (+ env 팩토리)
-src/processing/  Processing 레이어 — stages/(per-review stage, 순수 함수 + ctx 주입) · pipeline/(runner: version-aware input_hash 캐시, phase1: 오케스트레이션, context, reconciliation) · index.ts(엔트리)
-src/db/          Db (pg + pgvector 직렬화, 모든 쿼리)
-db/migrations/   001_init.sql (§5 스키마)
-corpus/          합성 리뷰 코퍼스
-scripts/         migrate · seed-registries · run-corpus
+backend/
+  src/contracts/   RawReview · ProcessedReview(facts/inferences/versions) · Stage zod 스키마
+  src/clients/     llm/{stub,anthropic} · embedding/{local,cohere} (+ env 팩토리)
+  src/processing/  Processing 레이어 — stages/(per-review stage, 순수 함수 + ctx 주입) · pipeline/(runner: version-aware input_hash 캐시, phase1: 오케스트레이션, context, reconciliation) · index.ts(엔트리)
+  src/codeflow/    repo 스캔 → 코드 지도 (languages.ts 레지스트리)
+  src/insight/     우선순위 + 제안
+  src/autodev/     Auto-Dev (orchestrator · brief · verify · drivers)
+  src/api/         Hono API (contract · app · static · routes)
+  src/db/          Db (pg + pgvector 직렬화, 모든 쿼리)
+  db/migrations/   *.sql (§5 스키마 + codeflow/autodev)
+  corpus/          합성 리뷰 코퍼스
+  scripts/         migrate · seed-registries · run-corpus · insight · codeflow-scan · autodev · serve
 ```

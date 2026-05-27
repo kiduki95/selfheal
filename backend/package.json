@@ -1,9 +1,9 @@
 {
-  "name": "selfheal",
+  "name": "selfheal-backend",
   "version": "0.5.0",
   "private": true,
   "type": "module",
-  "description": "Selfheal v0.0.1",
+  "description": "SelfHeal backend — review-driven pipeline (Processing/CodeFlow/Insight/Auto-Dev) + Hono API over Postgres/pgvector",
   "engines": {
     "node": ">=20"
   },
@@ -18,9 +18,7 @@
     "insight": "tsx scripts/insight.ts",
     "autodev": "tsx scripts/autodev.ts",
     "ui": "tsx scripts/ui-server.ts",
-    "web:dev": "npm --prefix web run dev",
-    "web:build": "npm --prefix web run build",
-    "serve": "npm --prefix web run build && tsx scripts/serve.ts",
+    "serve": "tsx scripts/serve.ts",
     "verify": "tsx scripts/migrate.ts && tsx scripts/seed-registries.ts && tsx scripts/run-corpus.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

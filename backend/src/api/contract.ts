@@ -20,7 +20,7 @@ export const envelope = <T>(data: T, repo: string, source: 'live' | 'mock' = 'li
 export interface PipelineStage { num: string; name: string; value: number; unit: string; sub: string; sparkData: number[]; }
 export interface Category { name: string; count: number; share: number; trend: 'up' | 'down' | 'flat'; pct: number; }
 export interface ActivityItem { kind: string; at: string; text: string; link: string; }
-// /api/dashboard payload — mirrors web/src/api/hooks/useDashboard.ts DashboardData 1:1.
+// /api/dashboard payload — mirrors frontend/src/api/hooks/useDashboard.ts DashboardData 1:1.
 // Surfaces the funnel + categories + activity feed AND the proposal queue + agent runs
 // the dashboard renders inline.
 export interface DashboardData {
@@ -34,7 +34,7 @@ export interface DashboardData {
 // `status` standardized on 'error' (web mock previously used 'err'; both sides now agree on 'error').
 export interface Source { id: string; kind: string; product: string; name: string; region: string; rate: number; lastSync: string; status: 'ok' | 'warn' | 'error'; own: boolean; }
 
-// Reviews stream — GET /api/reviews. Mirrors web/src/data/mock-extras.ts RawReview 1:1.
+// Reviews stream — GET /api/reviews. Mirrors frontend/src/data/mock-extras.ts RawReview 1:1.
 // `src` is the SourceKind union on the frontend; backend keeps it as a plain string
 // (source channel) since the DB stores arbitrary source identifiers. Fields with no DB
 // source yet (author/country/priority/confidence) are derived/defaulted in the handler.
@@ -72,7 +72,7 @@ export type GraphNodeKind = 'repo' | 'module' | 'feature' | 'gap';
 // A repo module/feature/gap node. IDs are PLAIN IDs (e.g. 't_ko', 'orphan_teams', 'root')
 // — NOT prefixed. The UI does side-panel and Reviews lookups by these raw IDs, so they are
 // the canonical key. Feature vs gap is disambiguated by `kind`, not by an ID prefix.
-// Mirrors web/src/data/mock.ts RepoModule exactly.
+// Mirrors frontend/src/data/mock.ts RepoModule exactly.
 export interface RepoModule {
   id: string;
   parent: string | null;                        // parent module id; null for repo root + gaps
@@ -82,7 +82,7 @@ export interface RepoModule {
   branchTag?: string;
   isOrphan?: boolean;                           // true for gap nodes
 }
-// A sampled review attached to a graph node. Mirrors web/src/data/mock.ts GraphReview.
+// A sampled review attached to a graph node. Mirrors frontend/src/data/mock.ts GraphReview.
 export interface GraphReview {
   src: string;                                  // source channel (frontend narrows to SourceKind)
   sentiment: 'pos' | 'neg' | 'neu' | 'mix';
@@ -96,7 +96,7 @@ export interface GraphReview {
 export interface GraphData { modules: RepoModule[]; reviews: Record<string, GraphReview[]>; }
 
 // Insight proposal card — GET /api/proposals + dashboard inline. Mirrors
-// web/src/data/mock.ts Proposal 1:1. Built from a DB row by src/api/routes/_proposal-map.ts.
+// frontend/src/data/mock.ts Proposal 1:1. Built from a DB row by src/api/routes/_proposal-map.ts.
 // `column` is the HITL kanban lane; `pri` is a small integer rank (0 = most urgent).
 // Optional fields (problem/approver/rejector/expectedImpact/similar/agent) are present
 // only when the underlying data exists.
@@ -124,7 +124,7 @@ export interface Proposal {
   agent?: string;
 }
 
-// Auto-Dev agent run — mirrors web/src/data/mock.ts AgentRun + AgentStep 1:1.
+// Auto-Dev agent run — mirrors frontend/src/data/mock.ts AgentRun + AgentStep 1:1.
 // The Auto-Dev layer is not built yet, so /api/dashboard returns agents: [] for now.
 export interface AgentStep {
   label: string;
@@ -150,7 +150,7 @@ export interface AgentRun {
   error?: string;
 }
 
-// Audit/activity event — aligned to the richer web mock shape (web/src/data/mock-extras.ts).
+// Audit/activity event — aligned to the richer web mock shape (frontend/src/data/mock-extras.ts).
 // The earlier {at, action} pair was too thin for the Activity timeline UI (day grouping,
 // actor avatars, tone-colored rows, expandable detail), so the mock shape wins.
 export interface AuditEvent {
