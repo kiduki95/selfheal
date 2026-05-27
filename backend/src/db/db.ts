@@ -635,9 +635,9 @@ export class Db {
   }
   // Refactor candidates (code-health P2) — files with ≥1 smell, smells aggregated per FILE (the file's
   // own god_file/hotspot + its symbols' complex_function, joined on shared path), with file metrics.
-  async refactorCandidates(repo: string): Promise<{ path: string; module: string; loc: number | null; cyclomatic: number | null; fan_in: number | null; churn_commits: number | null; health_score: number | null; kinds: string[]; max_score: number; smells: { kind: string; score: number; severity: string }[] }[]> {
-    const rows = await this.query<{ path: string; module: string; loc: number | null; cyclomatic: number | null; fan_in: number | null; churn_commits: number | null; health_score: number | null; kinds: string[]; max_score: number; smells: { kind: string; score: number; severity: string }[] }>(
-      `SELECT f.path, f.module, f.loc, f.cyclomatic, f.fan_in, f.churn_commits, f.health_score,
+  async refactorCandidates(repo: string): Promise<{ path: string; module: string; content_hash: string | null; loc: number | null; cyclomatic: number | null; fan_in: number | null; churn_commits: number | null; health_score: number | null; kinds: string[]; max_score: number; smells: { kind: string; score: number; severity: string }[] }[]> {
+    const rows = await this.query<{ path: string; module: string; content_hash: string | null; loc: number | null; cyclomatic: number | null; fan_in: number | null; churn_commits: number | null; health_score: number | null; kinds: string[]; max_score: number; smells: { kind: string; score: number; severity: string }[] }>(
+      `SELECT f.path, f.module, f.content_hash, f.loc, f.cyclomatic, f.fan_in, f.churn_commits, f.health_score,
               sm.kinds, sm.max_score, sm.smells
        FROM code_artifact_registry f
        JOIN LATERAL (
@@ -673,12 +673,22 @@ export class Db {
     return rows.map((r) => ({ ...r, confidence: Number(r.confidence), support: Number(r.support) }));
   }
 
-  async insertProposal(p: { repo: string; kind: string; ref_id: string | null; title: string; body: string; priority: number; target_module: string | null; placement: string | null; evidence: unknown; prerequisite?: string | null }): Promise<void> {
+  async insertProposal(p: { repo: string; kind: string; ref_id: string | null; title: string; body: string; priority: number; target_module: string | null; placement: string | null; evidence: unknown; prerequisite?: string | null; grounded_hash?: string | null }): Promise<void> {
     await this.query(
-      `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence, prerequisite)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [p.repo, p.kind, p.ref_id, p.title, p.body, p.priority, p.target_module, p.placement, JSON.stringify(p.evidence ?? {}), p.prerequisite ?? null],
+      `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence, prerequisite, grounded_hash)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [p.repo, p.kind, p.ref_id, p.title, p.body, p.priority, p.target_module, p.placement, JSON.stringify(p.evidence ?? {}), p.prerequisite ?? null, p.grounded_hash ?? null],
     );
+  }
+
+  // Current content_hash of a file node (grounding-freshness check). Null if the file is no longer in the
+  // scanned graph (moved/deleted by a refactor) — which itself signals staleness.
+  async fileContentHash(repo: string, path: string): Promise<string | null> {
+    const rows = await this.query<{ content_hash: string | null }>(
+      `SELECT content_hash FROM code_artifact_registry WHERE repo=$1 AND path=$2 AND kind='file' LIMIT 1`,
+      [repo, path],
+    );
+    return rows[0]?.content_hash ?? null;
   }
 
   // Landing-zone gate (P3): is a proposal's prerequisite refactor already in progress/done? The blocked
@@ -785,6 +795,23 @@ export class Db {
       [repo, kind, ref_id],
     );
     return rows[0] ?? null;
+  }
+
+  // Cross-run file serialization (#4): is ANY active run already working the given target file (a refactor
+  // keyed by its ref_id=path, or a file-targeted bug by target_module)? Lets the queue defer a different
+  // proposal that would branch off the same file and produce a conflicting patch — across dispatch runs,
+  // not just within one. (Released once that run is merged + a re-scan regrounds, per the freshness gate.)
+  async activeRunForFile(repo: string, path: string): Promise<boolean> {
+    const rows = await this.query<{ one: number }>(
+      `SELECT 1 AS one FROM agent_runs r
+       JOIN proposals p ON p.repo = r.repo AND p.kind = r.kind AND p.ref_id = r.ref_id
+       WHERE r.repo = $1
+         AND r.status NOT IN ('failed','timed_out','rejected_by_verifier','canceled')
+         AND (CASE WHEN p.kind = 'refactor' THEN p.ref_id ELSE p.target_module END) = $2
+       LIMIT 1`,
+      [repo, path],
+    );
+    return rows.length > 0;
   }
 
   async getAgentRun(id: string): Promise<AgentRunRow | null> {

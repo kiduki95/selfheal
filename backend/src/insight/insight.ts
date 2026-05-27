@@ -113,7 +113,7 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
       ? partners.map((p) => `\`${p.dst_path}\`(${Math.round(p.confidence * 100)}%${p.hidden ? ', 숨은의존' : ''}${p.cross_module ? ', 타모듈' : ''})`).join(', ')
       : '(이력상 함께 바뀌는 파일 없음)';
     const body = `## 코드 건강 신호 (공급측 — 코드가 스스로 신고)\n- 파일: \`${c.path}\` · 모듈: \`${c.module}\`\n- 메트릭: ${c.loc ?? '?'}줄 · 복잡도 ${c.cyclomatic ?? '?'} · 의존(fan-in) ${c.fan_in ?? 0} · 최근변경(churn) ${churn} · health ${c.health_score ?? '?'}/100\n- 냄새: ${smellLine}\n- **왜 바뀌나(함께 변경되는 파일)**: ${whyLine}\n- **impact ${impact.score} (${impact.band})** — 부채이자(오염도 × 활동)\n\n→ 이 모듈에 기능/버그 작업을 올리기 전 정리(Preparatory Refactoring) 권장. '숨은의존/타모듈' 파트너가 있으면 책임이 엉켜 있다는 신호 — 경계 재정렬부터. Auto-Dev는 행위보존 검증으로 안전 리팩토링(후속 단계).`;
-    await db.insertProposal({ repo, kind: 'refactor', ref_id: c.path, title, body, priority: impact.score, target_module: c.module, placement: 'existing_module', evidence: { smells: c.smells, loc: c.loc, cyclomatic: c.cyclomatic, fan_in: c.fan_in, churn, health: c.health_score, max_score: c.max_score, cochange: partners, impact: impact.score, band: impact.band } });
+    await db.insertProposal({ repo, kind: 'refactor', ref_id: c.path, title, body, priority: impact.score, target_module: c.module, placement: 'existing_module', grounded_hash: c.content_hash, evidence: { smells: c.smells, loc: c.loc, cyclomatic: c.cyclomatic, fan_in: c.fan_in, churn, health: c.health_score, max_score: c.max_score, cochange: partners, impact: impact.score, band: impact.band } });
     out.push({ kind: 'refactor', title, priority: impact.score, target_module: c.module, placement: 'existing_module', body, band: impact.band });
     // Toxic = high/critical refactor. Demand-side work landing here gets gated behind it.
     if (impact.band === 'critical' || impact.band === 'high') {
@@ -153,9 +153,12 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
     const samples = (g.samples ?? []).filter(Boolean) as string[];
     const title = `[bug] ${g.feature ?? '?'} — ${g.error_signature ?? '오류'} (증거 ${g.corroboration_count}건)`;
     const prereq = prereqFor(g.module_path, g.code_module); // P3: landing on a toxic file/module?
+    // freshness stamp. NOTE: g.module_path is actually a FILE path (ca.path), despite the name — the stamp
+    // source here and the orchestrator's freshness check (groundedPath→target_module) use the same value.
+    const groundedHash = g.module_path ? await db.fileContentHash(repo, g.module_path) : null;
     const body = `${gateNote(prereq)}## 버그 신호\n- 기능: **${g.feature ?? '?'}** · 코드: \`${g.module_path ?? '미매핑'}\` [risk=${risk} (코드 ${g.risk_tier ?? '?'}, blast-radius ${callers}), severity ${sev}]\n- 에러 패밀리: \`${g.error_signature ?? '?'}\`\n- 증거: ${g.corroboration_count}건 · 플랫폼 ${(g.affected_platforms ?? []).join(', ')} · 버전 ${(g.affected_versions ?? []).join(', ')} · 추세 ${g.trend}\n- **impact ${impact.score} (${impact.band})** · 추정 공수 ${effort.size} (${effort.weeks})\n\n## 샘플 리뷰\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}\n\n→ Auto-Dev가 \`${g.module_path ?? '?'}\` 수정 PR 후보.`;
     if (g.feature_id) bugFeatureIds.add(String(g.feature_id).toLowerCase()); // ⑤ (normalize for safe compare)
-    await db.insertProposal({ repo, kind: 'bug_fix', ref_id: g.id, title, body, priority: impact.score, target_module: g.module_path ?? null, placement: null, prerequisite: prereq, evidence: { corroboration, sev, risk_effective: risk, code_risk: g.risk_tier, blast_radius: callers, trend: g.trend, impact: impact.score, band: impact.band, effort: effort.size, effort_weeks: effort.weeks, prerequisite: prereq } });
+    await db.insertProposal({ repo, kind: 'bug_fix', ref_id: g.id, title, body, priority: impact.score, target_module: g.module_path ?? null, placement: null, prerequisite: prereq, grounded_hash: groundedHash, evidence: { corroboration, sev, risk_effective: risk, code_risk: g.risk_tier, blast_radius: callers, trend: g.trend, impact: impact.score, band: impact.band, effort: effort.size, effort_weeks: effort.weeks, prerequisite: prereq } });
     out.push({ kind: 'bug_fix', title, priority: impact.score, target_module: g.module_path ?? null, placement: null, body, band: impact.band, effort: effort.size });
   }
   if (suppressed) console.log(`  ④ suppressed ${suppressed} resolved bug proposal(s)`);

@@ -217,4 +217,62 @@ describe.skipIf(!reachable)('Auto-Dev orchestrator', () => {
       (config as { landingZoneGate: boolean }).landingZoneGate = prev;
     }
   });
+
+  it('freshness gate: holds a stale proposal (target changed since grounding), dispatches once regrounded', async () => {
+    // current scan: src/orders file is at content_hash FRESH
+    await db.query(`INSERT INTO code_artifact_registry (repo, path, kind, content_hash) VALUES ($1,'src/orders','file','FRESH')`, [REPO]);
+    // a bug grounded against the OLD hash (code moved since) → stale
+    await db.query(
+      `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence, grounded_hash)
+       VALUES ($1,'bug_fix',$2,'[bug] crash','repro',80,'src/orders',NULL,'{}','STALE')`,
+      [REPO, REF],
+    );
+    await db.decideProposal({ repo: REPO, kind: 'bug_fix', ref_id: REF, decision: 'approved' });
+
+    const held = await runAutoDev(REPO, opts(new StubAgentDriver(goodScript)));
+    expect(held).toHaveLength(0); // stale grounding → held (no run created)
+
+    // reground (a fresh re-scan + re-insight would do this): now the stamp matches the current scan.
+    await db.query(`UPDATE proposals SET grounded_hash='FRESH' WHERE repo=$1 AND ref_id=$2`, [REPO, REF]);
+    const fresh = await runAutoDev(REPO, opts(new StubAgentDriver(goodScript)));
+    expect(fresh[0]!.status).toBe('pr_open');
+  });
+
+  it('a staleness-held proposal does NOT consume the file slot — a fresh same-file one still dispatches', async () => {
+    await db.query(`INSERT INTO code_artifact_registry (repo, path, kind, content_hash) VALUES ($1,'src/orders','file','FRESH')`, [REPO]);
+    // high-priority bug on src/orders but STALE grounding → held; lower-priority FRESH bug on same file.
+    await db.query(`INSERT INTO proposals (repo,kind,ref_id,title,body,priority,target_module,placement,evidence,grounded_hash) VALUES ($1,'bug_fix','sig-stale','[bug] stale','r',95,'src/orders',NULL,'{}','STALE')`, [REPO]);
+    await db.query(`INSERT INTO proposals (repo,kind,ref_id,title,body,priority,target_module,placement,evidence,grounded_hash) VALUES ($1,'bug_fix','sig-fresh','[bug] fresh','r',60,'src/orders',NULL,'{}','FRESH')`, [REPO]);
+    await db.decideProposal({ repo: REPO, kind: 'bug_fix', ref_id: 'sig-stale', decision: 'approved' });
+    await db.decideProposal({ repo: REPO, kind: 'bug_fix', ref_id: 'sig-fresh', decision: 'approved' });
+
+    const out = await runAutoDev(REPO, opts(new StubAgentDriver(goodScript)));
+    expect(out).toHaveLength(1);
+    expect(out[0]!.ref_id).toBe('sig-fresh'); // the held (stale) high-prio one didn't block the fresh one
+  });
+
+  it('cross-run serialization: defers a proposal whose target file has an active run from a prior dispatch', async () => {
+    // a prior, still-active run occupies src/orders (a different proposal).
+    await db.query(`INSERT INTO proposals (repo,kind,ref_id,title,body,priority,target_module,placement,evidence) VALUES ($1,'bug_fix','sig-prior','[bug] prior','r',70,'src/orders',NULL,'{}')`, [REPO]);
+    const claimed = await db.createAgentRun({ repo: REPO, kind: 'bug_fix', ref_id: 'sig-prior', status: 'implementing' });
+    expect(claimed).not.toBeNull();
+
+    await seedApproved(db); // a NEW approved bug on the same file (src/orders)
+    const out = await runAutoDev(REPO, opts(new StubAgentDriver(goodScript)));
+    expect(out).toHaveLength(0); // deferred — the prior run still holds src/orders
+  });
+
+  it('file serialization: two proposals on the same file → only the higher-priority one dispatches', async () => {
+    for (const [ref, prio] of [['sig-hi', 90], ['sig-lo', 50]] as const) {
+      await db.query(
+        `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence)
+         VALUES ($1,'bug_fix',$2,$3,'repro',$4,'src/orders',NULL,'{}')`,
+        [REPO, ref, `[bug] ${ref}`, prio],
+      );
+      await db.decideProposal({ repo: REPO, kind: 'bug_fix', ref_id: ref, decision: 'approved' });
+    }
+    const out = await runAutoDev(REPO, opts(new StubAgentDriver(goodScript)));
+    expect(out).toHaveLength(1); // same target file → serialized to one this run
+    expect(out[0]!.ref_id).toBe('sig-hi'); // the higher-priority proposal wins the slot
+  });
 });

@@ -47,6 +47,8 @@ export interface ProposalRow {
   placement: string | null;
   evidence: Record<string, unknown> | null;
   prerequisite?: string | null; // P3 landing-zone: ref_id of a refactor that must land first (held until then)
+  grounded_hash?: string | null; // freshness: target file content_hash at grounding (held if it changed)
+  priority?: number; // for same-file serialization (dispatch the highest-priority one)
 }
 
 // Common instruction block (spec §4): failing-repro-test-first (TDD), edit only within blast-radius,

@@ -64,8 +64,12 @@ export async function runAutoDev(repo: string, opts: RunAutoDevOpts): Promise<Ru
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
   // Dispatch queue: approved proposals with no active/succeeded run (spec §6.2).
-  const approved = (await db.approvedProposals(repo)) as ProposalRow[];
+  // Highest-priority first, so same-file serialization (below) keeps the most important proposal.
+  const approved = ((await db.approvedProposals(repo)) as ProposalRow[]).sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+  // The file a proposal is grounded on: refactor → its ref_id (the file); file-targeted bug → target_module.
+  const groundedPath = (p: ProposalRow): string | null => (p.kind === 'refactor' ? p.ref_id : p.target_module);
   const queue: ProposalRow[] = [];
+  const claimedFiles = new Set<string>(); // #4: at most one in-flight run per target file this run
   for (const p of approved) {
     // Landing-zone gate (P3, Preparatory Refactoring): hold a proposal whose prerequisite refactor is not
     // yet in progress/done. Order enforcement, not a permanent block — the refactor (itself unblocked) is
@@ -74,9 +78,29 @@ export async function runAutoDev(repo: string, opts: RunAutoDevOpts): Promise<Ru
       log(`hold ${p.kind}/${String(p.ref_id).slice(0, 8)} — landing-zone gate: prerequisite refactor '${p.prerequisite}' not yet in progress`);
       continue;
     }
+    // Freshness gate (#2): a file-targeted proposal whose target moved/changed since it was grounded is
+    // STALE — its "where" no longer matches the code. Hold until a re-scan + re-Insight regrounds it
+    // (the proposal keeps its approval via the stable ref_id). Always on — correctness, not a preference.
+    const gPath = groundedPath(p);
+    if (p.grounded_hash && gPath) {
+      const cur = await db.fileContentHash(p.repo, gPath);
+      if (cur !== p.grounded_hash) {
+        log(`hold ${p.kind}/${String(p.ref_id).slice(0, 8)} — stale grounding: target '${gPath}' changed since grounded; re-scan + re-insight to reground`);
+        continue;
+      }
+    }
     const active = await db.activeRunFor(p.repo, p.kind, p.ref_id);
-    if (!active) queue.push(p);
-    else log(`skip ${p.kind}/${String(p.ref_id).slice(0, 8)} — active/succeeded run ${active.id} (${active.status})`);
+    if (active) { log(`skip ${p.kind}/${String(p.ref_id).slice(0, 8)} — active/succeeded run ${active.id} (${active.status})`); continue; }
+    // File serialization (#4): two proposals editing the same file would branch off the same base and
+    // produce conflicting patches. Dispatch only the highest-priority one — both within this run
+    // (claimedFiles) and across runs (an active run already on that file). Deferred ones reground after
+    // the first lands + the next pipeline run.
+    if (gPath && (claimedFiles.has(gPath) || (await db.activeRunForFile(repo, gPath)))) {
+      log(`defer ${p.kind}/${String(p.ref_id).slice(0, 8)} — target file '${gPath}' already in progress (serialize)`);
+      continue;
+    }
+    if (gPath) claimedFiles.add(gPath);
+    queue.push(p);
   }
 
   const outcomes: RunOutcome[] = [];
