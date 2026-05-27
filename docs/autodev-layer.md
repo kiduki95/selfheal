@@ -130,6 +130,7 @@ interface AgentDriver {
 3. 동시성 슬롯 만큼: claim → `agent_runs`(queued) insert.
 4. prepare: mirror→`git worktree add` 브랜치(after_create).
 5. brief: proposal + CodeFlow 질의 조립(§4).
+   - **빈 scope 가드(F3)**: brief의 grounding(target_module ∪ target_files ∪ blast-radius)이 비면 — CodeFlow가 이 proposal을 코드에 매핑하지 못한 것(미스캔/레거시 repo의 증상) — driving 없이 즉시 `rejected_by_verifier`. 목적지 없는 agent의 전체 repo 탐색(실 driver 타임아웃·stub scattershot)을 차단. 판정은 grounding만 보고 `verify.scopeAllow` 허용치는 제외(허용치가 grounding 부재를 가리지 못하게).
 6. DRIVE: AgentDriver를 워크스페이스에서 구동(planning→implementing, bounded turns).
 7. VERIFY: §5 결정론 게이트(v1) → 실패 시 피드백 재시도(backoff).
 8. 통과: commit→branch→**patch+PR본문 아티팩트(dry-run)** → `pr_open`/`succeeded`, `proposal_reviews`를 in_dev로. 실패: `failed`/`rejected_by_verifier` + 사유.
