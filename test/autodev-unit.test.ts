@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { sanitizeSegment, branchName } from '../src/autodev/workspace.js';
 import { backoffMs, scopePrefixes } from '../src/autodev/verify.js';
 import { assembleBrief, type ProposalRow } from '../src/autodev/brief.js';
+import { buildAgentPrompt, parseChangedFiles } from '../src/autodev/drivers/claude-cli.js';
 
 // Pure-logic Auto-Dev tests — no DB, no git. These run everywhere (verify scope/diff helpers,
 // sanitize, brief assembly, backoff) even when Postgres is unavailable.
@@ -50,6 +51,39 @@ describe('brief assembly (CodeFlow-grounded, spec §4)', () => {
     expect(brief.defect).toBeUndefined();
     expect(brief.instructions).toMatch(/missing feature/);
     expect(brief.targetFiles).toEqual(['src/alerts']);
+  });
+});
+
+describe('claude-cli driver — pure pieces (v2-a)', () => {
+  const base: ProposalRow = {
+    repo: 'r', kind: 'bug_fix', ref_id: 'sig-abcdef012', title: '[bug] order crash',
+    body: '## repro\ntap buy', target_module: 'src/orders', placement: null,
+    evidence: { defect: { repro: ['tap buy'], expected: 'placed', actual: 'crash' } },
+  };
+
+  it('buildAgentPrompt embeds the grounded brief + TDD/scope directives; adds feedback only on retry', async () => {
+    const brief = await assembleBrief(base, { blastRadius: [{ path: 'src/orders/order.ts', module: 'src/orders', symbol: 'placeOrder', risk_tier: 'low', callers: 2 }] });
+
+    const first = buildAgentPrompt(brief, 0);
+    expect(first).toMatch(/autonomous coding agent/i);
+    expect(first).toMatch(/FAILING test/);          // TDD directive
+    expect(first).toMatch(/Do NOT run git/);        // harness owns VCS
+    expect(first).toContain(brief.instructions);    // the grounded brief is embedded
+    expect(first).not.toMatch(/Previous attempt FAILED/); // no feedback on attempt 0
+
+    const retry = buildAgentPrompt(brief, 1, '- [scope] edited src/x.ts outside boundary');
+    expect(retry).toMatch(/Previous attempt FAILED verification \(attempt 1\)/);
+    expect(retry).toMatch(/outside boundary/);
+  });
+
+  it('parseChangedFiles handles modified, untracked, and renamed porcelain lines', () => {
+    const porcelain = ' M src/orders/order.ts\n?? src/orders/order.test.ts\nR  old/a.ts -> src/orders/b.ts\n';
+    const files = parseChangedFiles(porcelain);
+    expect(files).toContain('src/orders/order.ts');
+    expect(files).toContain('src/orders/order.test.ts');
+    expect(files).toContain('src/orders/b.ts'); // rename → new path
+    expect(files).not.toContain('old/a.ts');
+    expect(parseChangedFiles('')).toEqual([]);   // empty diff
   });
 });
 

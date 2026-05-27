@@ -201,7 +201,7 @@ test/autodev-*.test.ts  결정론 harness (StubAgentDriver + 격리 DB)
 1. **v1-a 스키마+DB**: `008_autodev.sql` + `Db` 헬퍼 + 결정론 테스트.
 2. **v1-b 오케스트레이션+격리+StubDriver**: claim·상태머신·worktree·brief·결정론 게이트·patch 아티팩트. StubAgentDriver로 **전 경로 결정론 테스트**(승인 proposal→pr_open, 빈 diff 거부, 범위 위반 거부, 중복 claim 차단, rollback). `npm run autodev`.
 3. ✅ **v1-c UI 배선 (백엔드)**: `/api/agents`(agent_runs→AgentRun, steps는 agent_run_events에서 복원)·`/api/activity`(agent_run_events→AuditEvent) live 승격. `src/api/routes/{agents,activity}.ts`+`_autodev-map.ts`, ROUTES status `live`, `Db.{listAgentRuns,listAgentRunEvents}`. 테스트 `test/api-autodev.test.ts`(Hono `app.request`). 프론트 mock→fetch 스왑은 web 팀(`USE_LIVE`).
-4. **v2-a ClaudeCliAgentDriver**: 실 코드 생성(구독). 실데이터 검증.
+4. ✅ **v2-a ClaudeCliAgentDriver (구현)**: `src/autodev/drivers/claude-cli.ts` — 구독 `claude -p`(headless)를 격리 worktree cwd에서 구동, 파일툴만(Read/Edit/Write/Glob/Grep, Bash 기본 차단), `--permission-mode acceptEdits`, `--max-turns` bounded, env 튜닝(AGENT_MODEL/MAX_TURNS/ALLOWED_TOOLS/TIMEOUT_MS). brief는 프롬프트로 주입(파일 아님 — 스코프 게이트 오염 방지). 변경파일은 worktree git status로 판정(자기보고 아님). 순수조각(buildAgentPrompt·parseChangedFiles) 단위테스트. 라이브 호출은 비결정·구독이라 미테스트. **실 end-to-end는 kiduki-gcs codeflow scan→corpus→insight→approve 후 `AGENT_DRIVER=claude-cli npm run autodev <mirror>`로 스모크 필요(별도).** verify 게이트 명령(node --check/eslint/build) 배선은 후속.
 5. **v2-b 적대적 Skeptic + 위험계층**: Hunter→Skeptic→Referee, manualReview 강제.
 6. **후속**: 실 GitHub push+PR opt-in(토큰/플래그), pg-boss 무인 루프, bug-hunter fix-plan canary/rollout 완전 흡수.
 

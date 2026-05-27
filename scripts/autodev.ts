@@ -1,8 +1,6 @@
 import { Db } from '../src/db/db.js';
 import { runAutoDev } from '../src/autodev/index.js';
 import { config } from '../src/config.js';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 
 // Auto-Dev Layer (layer 5) CLI — `npm run autodev`. Consumes approved proposals for the target repo,
 // drives the (default stub) coding agent in an isolated worktree, runs the deterministic verify gate,
@@ -18,20 +16,14 @@ async function main() {
 
   console.log(`\n=== Auto-Dev Layer (target=${config.targetRepo}, driver=${config.agentDriver}, mirror=${mirrorDir}) ===`);
 
-  // before_run hook: inject the grounded brief as a file the agent can read (spec §4 — workspace gets
-  // the brief, not a product-side skill). after_create installs nothing here (deps left to the product).
+  // No workspace-file injection: the grounded brief reaches the agent through the driver prompt
+  // (ClaudeCliAgentDriver.buildAgentPrompt), NOT a file in the worktree. Writing a brief/AGENTS.md into
+  // the worktree would surface in `git status` and get rejected by verify's scope gate (+ pollute the
+  // patch), so the brief stays out-of-tree.
   const outcomes = await runAutoDev(config.targetRepo, {
     db,
     mirrorDir,
     concurrency,
-    hooks: {
-      beforeRun: async (path) => {
-        // The brief is assembled per run inside the orchestrator; here we leave an AGENTS.md placeholder
-        // so the workspace advertises the convention. (Real brief-file injection happens with the v2
-        // driver that actually reads it; the stub reads the brief object directly.)
-        try { writeFileSync(join(path, 'AGENTS.md'), '# selfheal auto-dev workspace\nEdit only within the brief scope.\n'); } catch { /* best effort */ }
-      },
-    },
     log: (m) => console.log(`  ${m}`),
   });
 
