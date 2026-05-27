@@ -127,6 +127,7 @@ interface AgentDriver {
 
 1. Insight → `proposals`. 사람이 UI 승인 → `proposal_reviews.decision='approved'` (A1, 완료).
 2. `runAutoDev`(CLI `npm run autodev`; 후속 pg-boss 무인 루프) → `approvedProposals(repo)`에서 활성/성공 run 없는 것 필터.
+   - **착지대 게이트(P3, code-health)**: 제안의 `prerequisite`(선행 refactor ref_id)가 아직 in_dev/done 아니면 **보류**(큐 제외·run 미생성). 순서강제(Preparatory Refactoring) — toggle `config.landingZoneGate`(기본 on). refactor는 prerequisite가 없어 먼저 디스패치되고, 그게 진행되면 의존 작업이 풀린다.
 3. 동시성 슬롯 만큼: claim → `agent_runs`(queued) insert.
 4. prepare: mirror→`git worktree add` 브랜치(after_create).
 5. brief: proposal + CodeFlow 질의 조립(§4).

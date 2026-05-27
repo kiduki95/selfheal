@@ -52,7 +52,7 @@
 - **`signal_groups`** — incident 단위. `error_signature`, `corroboration_count`, `affected_platforms/versions`, `trend`, `code_artifact_ids`. Insight 우선순위의 입력.
 - **`feature_registry`** (repo-scoped) — CodeFlow가 깐 module→feature→sub-feature 트리. `status` ∈ {grounded, gap}, `parent_id`(SKOS), `merged_into`(gap 클러스터링), `pref_label`. Processing 그래프 + gap floating의 원천.
 - **`code_artifact_registry` / `code_edges`** — 파일·심볼 노드 + contains/imports 엣지. Auto-Dev의 "어디를 건드리면 무엇이 영향받나" 입력.
-- **`proposals`** (repo-scoped) — Insight 산출. `kind` ∈ {bug_fix, feature_gap, enhancement, **refactor**(code-health 공급측 — 통일 impact 큐)}, `priority`, `target_module`, `placement`, `body`(issue 초안 md), `evidence`(verdict 등). Insights 페이지의 원천, Auto-Dev의 입력.
+- **`proposals`** (repo-scoped) — Insight 산출. `kind` ∈ {bug_fix, feature_gap, enhancement, **refactor**(code-health 공급측 — 통일 impact 큐)}, `priority`, `target_module`, `placement`, `body`(issue 초안 md), `evidence`(verdict 등), `prerequisite`(착지대 게이트 — 선행 refactor ref_id). Insights 페이지의 원천, Auto-Dev의 입력.
 
 마이그레이션: `001_init`(14 테이블), `002_code_risk`, `003_observability`(metric_snapshots), `004_codeflow`(code_edges, codeflow_runs), `005_feature_repo`(feature_registry.repo), `006_proposals`. **다음 예정**: `007_ingestion`(sources, raw_reviews), `008_autodev`(agent_runs), `009_audit`(audit_events).
 
