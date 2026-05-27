@@ -138,6 +138,36 @@ describe.skipIf(!reachable)('Auto-Dev orchestrator', () => {
     expect(existsSync(run!.workspace_path!)).toBe(false); // worktree torn down
   });
 
+  it('rejects an empty-scope proposal up front without dispatching the agent (F3)', async () => {
+    // No target_module, no evidence → no blast-radius (empty test repo) → empty brief scope. The
+    // orchestrator must reject before driving (would otherwise time out / scatter on a legacy repo).
+    await db.query(
+      `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence)
+       VALUES ($1,'bug_fix','sig-noscope01','[bug] something somewhere','no repro',50,NULL,NULL,$2)`,
+      [REPO, JSON.stringify({})],
+    );
+    await db.decideProposal({ repo: REPO, kind: 'bug_fix', ref_id: 'sig-noscope01', decision: 'approved' });
+
+    // A driver that would throw if ever invoked — proves we reject BEFORE dispatch.
+    const explode = new StubAgentDriver(goodScript);
+    (explode as any).run = () => { throw new Error('driver must not be called for empty-scope'); };
+
+    const outcomes = await runAutoDev(REPO, opts(explode));
+    expect(outcomes[0]!.status).toBe('rejected_by_verifier');
+
+    const run = await db.getAgentRun(outcomes[0]!.runId);
+    expect(run?.status).toBe('rejected_by_verifier');
+    expect(run?.error).toMatch(/empty scope/);
+
+    const phases = (await db.query<{ phase: string }>(`SELECT phase FROM agent_run_events WHERE run_id=$1`, [outcomes[0]!.runId])).map((e) => e.phase);
+    expect(phases).not.toContain('implementing'); // never drove the agent
+    expect(phases).toContain('rejected_by_verifier');
+
+    // The reject path must still tear down its worktree (finally branch on early return).
+    expect(run?.workspace_path).toBeTruthy();
+    expect(existsSync(run!.workspace_path!)).toBe(false);
+  });
+
   it('forces manual-review draft handoff for a critical risk tier (still pr_open)', async () => {
     await db.query(
       `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence)

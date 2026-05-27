@@ -2,6 +2,7 @@ import { Db } from '../src/db/db.js';
 import { makeEmbeddingClient } from '../src/clients/embedding/index.js';
 import { makeLlmClient } from '../src/clients/llm/index.js';
 import { scanRepo, persistScan } from '../src/codeflow/index.js';
+import { CODE_EXTENSIONS } from '../src/codeflow/languages.js';
 
 // codeflow dogfood: selfheal 자체 src를 스캔해 코드 그래프를 적재 + "모듈→기능" 요약 출력.
 // 네 비전 1단계 ("현재 코드베이스 기준 어느 모듈에 어떤 기능들이 있는지 스캔·정리")의 구현.
@@ -17,6 +18,22 @@ async function main() {
 
   console.log(`\n=== CodeFlow scan: ${repo} (${rootDir})  enrich=${enrich ? 'on' : 'off'} ===`);
   const scan = scanRepo({ rootDir, repo });
+
+  // Fail loud on an empty scan (F2). persistScan does a destructive repo-scoped rebuild (DELETE then
+  // INSERT), so persisting 0 nodes would silently WIPE the existing good graph and leave nothing — the
+  // worst kind of no-op. An empty result almost always means misdetected source roots or an unsupported
+  // language, not "this repo has no code". Abort before persist so the prior graph survives.
+  if (scan.nodes.length === 0) {
+    await db.close();
+    throw new Error(
+      `CodeFlow scan produced 0 nodes for ${repo} at ${rootDir}. ` +
+      `No parseable source files were found under the auto-detected roots. ` +
+      `Supported extensions: ${CODE_EXTENSIONS.join(', ')} (.vue not yet supported). ` +
+      `Check the repo's source layout or pass explicit srcDirs. Refusing to persist an empty graph ` +
+      `(it would wipe the existing one).`,
+    );
+  }
+
   const stats = await persistScan(scan, db, embedder, llm);
 
   console.log(`\n적재 완료: nodes=${stats.nodes} (${JSON.stringify(stats.byKind)}) edges=${stats.edges} features=${stats.features}`);
@@ -51,7 +68,8 @@ async function main() {
 
   // code-derived features (grounded)
   const feats = await db.query<{ pref_label: string; status: string }>(
-    `SELECT pref_label, status FROM feature_registry WHERE origin='code_derived' ORDER BY pref_label`,
+    `SELECT pref_label, status FROM feature_registry WHERE origin='code_derived' AND repo=$1 ORDER BY pref_label`,
+    [repo],
   );
   console.log(`\n--- code-derived features (grounded): ${feats.length} ---`);
   console.log(`  ${feats.map((f) => f.pref_label).join(', ')}`);

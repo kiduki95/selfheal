@@ -65,8 +65,8 @@ function norm(p: string): string {
 }
 
 // Is `file` within scope = any of the allowed prefixes (module/path roots)? A file matches a prefix
-// when it equals it or sits under it (prefix + '/'). Module names are matched as path substrings too,
-// since CodeFlow modules are directory-ish (best-effort tolerance — open question #4).
+// when it equals it or sits under it (prefix + '/') — path-ROOT matching only (see the inner comment
+// for why bare-name substring matching was removed).
 function inScope(file: string, prefixes: string[]): boolean {
   const f = norm(file);
   return prefixes.some((p) => {

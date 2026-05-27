@@ -5,7 +5,7 @@ import { assembleBrief, type ProposalRow, type GroundedBrief, type BlastRadiusEn
 import { createWorkspace, runBeforeRun, runAfterRun, type Workspace, type WorkspaceHooks } from './workspace.js';
 import { makeAgentDriver } from './drivers/index.js';
 import type { AgentDriver } from './drivers/types.js';
-import { verify, backoffMs, type VerifyConfig, type VerifyResult } from './verify.js';
+import { verify, backoffMs, scopePrefixes, type VerifyConfig, type VerifyResult } from './verify.js';
 
 // AutoDev Orchestrator (spec §2, §3, §6). The SINGLE authority that serializes state transitions so a
 // proposal is never double-dispatched. Per run: prepare → brief → DRIVE → VERIFY (bounded retry) →
@@ -124,6 +124,23 @@ async function runOne(
     // BRIEF — CodeFlow-grounded brief (spec §4).
     await transition('planning', 'planning', 'assembling grounded brief');
     const brief = await assembleBrief(proposal, { db: ctx.blastRadius ? undefined : db, blastRadius: ctx.blastRadius });
+
+    // Empty-scope guard (F3). The brief's GROUNDING = target module ∪ target files ∪ blast-radius. When
+    // it is empty, CodeFlow produced no grounding for this proposal (e.g. target_module=null with no
+    // mapped artifacts — the symptom of an unscanned/legacy repo). Dispatching the agent here is the
+    // exact failure mode the harness exists to prevent: with no destination it explores the whole repo,
+    // times out (the real driver) or edits scattershot (the stub). Reject up front instead of driving.
+    // NOTE: pass [] (NOT cfg.scopeAllow) — scopePrefixes seeds its set with the tolerance prefixes, so
+    // including scopeAllow here would let a mere test-dir tolerance mask a total lack of grounding and
+    // silently defeat this guard. The verify gate still uses cfg.scopeAllow for its scope tolerance.
+    if (scopePrefixes(brief, []).length === 0) {
+      const reason = 'empty scope — CodeFlow produced no target module / files / blast-radius for this proposal (grounding missing; not dispatching the agent)';
+      await db.updateAgentRun(runId, { status: 'rejected_by_verifier', error: reason });
+      await db.appendRunEvent(runId, 'rejected_by_verifier', reason, { scope: [] });
+      log(`run ${runId.slice(0, 8)} → rejected_by_verifier: ${reason}`);
+      return { runId, ref_id: proposal.ref_id, kind: proposal.kind, status: 'rejected_by_verifier', branch: ws.branch };
+    }
+
     await runBeforeRun(ws, ctx.hooks); // before_run: inject brief/AGENTS.md
 
     // DRIVE + VERIFY with bounded retry (spec §5).

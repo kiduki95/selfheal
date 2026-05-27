@@ -2,11 +2,12 @@ import ts from 'typescript';
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, relative, dirname, sep } from 'node:path';
+import { isCodeFile, isDeclarationFile, isTestSourceFile, scriptKindFor, resolveCandidates, stripSourceExt } from './languages.js';
 
 // codeflow T1 parse (codeflow-layer.md §4) — TypeScript Compiler API로 결정론 추출 (Claude 0).
 // tree-sitter 대신 이미 있는 `typescript` 의존성 사용 → 네이티브 빌드 없이 크로스플랫폼.
-// .ts/.tsx 다중 소스루트 지원 (Next.js app/components/lib/hooks 등). 산출: module/file/symbol
-// 노드 + contains/imports 엣지 + 모듈→기능(feature) 후보.
+// JS/TS family (.ts/.tsx/.js/.jsx/.mjs/.cjs) 다중 소스루트 지원 — 언어 선언은 languages.ts 레지스트리
+// 단일 출처. 산출: module/file/symbol 노드 + contains/imports/calls 엣지 + 모듈→기능(feature) 후보.
 
 export type NodeKind = 'module' | 'file' | 'symbol';
 
@@ -52,7 +53,7 @@ export interface ScanOptions {
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'coverage', '.next', 'public', 'styles', '.github', 'vendor', 'build', 'out', 'target', '.venv', '.turbo']);
 const MAX_FILE_BYTES = 1_000_000; // skip generated/huge files (codegraph convention)
-const SRC_CANDIDATES = ['src', 'app', 'components', 'lib', 'hooks', 'pages', 'server'];
+const SRC_CANDIDATES = ['src', 'app', 'components', 'lib', 'hooks', 'pages', 'server', 'client'];
 
 export function scanRepo(opts: ScanOptions): ScanResult {
   const root = opts.rootDir;
@@ -60,7 +61,7 @@ export function scanRepo(opts: ScanOptions): ScanResult {
 
   const files = srcDirs
     .flatMap((d) => walkCode(join(root, d)))
-    .filter((f) => !f.endsWith('.d.ts') && !/\.(test|spec)\.(ts|tsx)$/.test(f));
+    .filter((f) => !isDeclarationFile(f) && !isTestSourceFile(f));
 
   const nodes: ArtifactNode[] = [];
   const edges: EdgeSpec[] = [];
@@ -101,8 +102,7 @@ export function scanRepo(opts: ScanOptions): ScanResult {
     });
     pushMember(moduleMembers, module, fileKey);
 
-    const kind = abs.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-    const sf = ts.createSourceFile(abs, text, ts.ScriptTarget.Latest, true, kind);
+    const sf = ts.createSourceFile(abs, text, ts.ScriptTarget.Latest, true, scriptKindFor(abs));
     for (const stmt of sf.statements) {
       if (ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier)) {
         const spec = stmt.moduleSpecifier.text;
@@ -258,7 +258,7 @@ function walkCode(dir: string): string[] {
     if (e.name.startsWith('.') || SKIP_DIRS.has(e.name)) continue;
     const p = join(dir, e.name);
     if (e.isDirectory()) out = out.concat(walkCode(p));
-    else if (e.name.endsWith('.ts') || e.name.endsWith('.tsx')) {
+    else if (isCodeFile(e.name) && !isDeclarationFile(e.name)) {
       try { if (statSync(p).size <= MAX_FILE_BYTES) out.push(p); } catch { /* unreadable → skip */ }
     }
   }
@@ -400,13 +400,13 @@ function card(path: string, module: string, symbol: string | null, signature: st
   return [path, module, symbol, signature, doc].filter(Boolean).join(' · ');
 }
 function resolveImport(fromRel: string, spec: string): string {
-  if (spec.startsWith('@/')) return spec.slice(2); // tsconfig paths: @/* → 루트상대
-  return toPosix(join(dirname(fromRel), spec)).replace(/\.js$/, '');
+  if (spec.startsWith('@/')) return stripSourceExt(spec.slice(2)); // tsconfig paths: @/* → 루트상대
+  return stripSourceExt(toPosix(join(dirname(fromRel), spec)));
 }
-// Resolve a bare import target to an actual file node key (try ext-less alias/relative as .ts/.tsx/index).
+// Resolve a bare import target to an actual file node key (try ext-less alias/relative across the
+// JS/TS family + index files — see languages.ts resolveCandidates).
 function resolveToFileKey(toRel: string, fileKeyByPath: Map<string, string>): string | undefined {
-  const base = toRel.replace(/\.(ts|tsx|js)$/, '');
-  for (const cand of [toRel, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]) {
+  for (const cand of resolveCandidates(toRel)) {
     const dst = fileKeyByPath.get(cand);
     if (dst) return dst;
   }
