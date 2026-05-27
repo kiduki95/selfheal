@@ -38,8 +38,11 @@ export function proposalsStale(lastProcessed: string | null, lastProposal: strin
   return Date.parse(lastProcessed) > Date.parse(lastProposal);
 }
 
+// User-facing labels for code-health smell kinds (refactor proposal titles/bodies).
+const SMELL_KO: Record<string, string> = { god_file: '거대 파일', complex_function: '복잡한 함수', untested_hotspot: '테스트없는 핫스팟' };
+
 export interface ProposalView {
-  kind: 'bug_fix' | 'feature_gap' | 'enhancement';
+  kind: 'bug_fix' | 'feature_gap' | 'enhancement' | 'refactor';
   title: string;
   priority: number; // = unified impact score 0–100 (comparable across kinds)
   target_module: string | null;
@@ -158,6 +161,19 @@ export async function runInsight(db: Db, llm: LlmClient, repo: string): Promise<
     const body = `## 개선 요청\n- 기능: **${e.pref_label}** (기존)\n- 수요: ${demand}건 · 추세 ${trend} · **impact ${impact.score} (${impact.band})** · 추정 공수 ${effort.size} (${effort.weeks})${crossRef}\n\n## 샘플\n${samples.map((s) => `- "${s.slice(0, 80)}"`).join('\n')}`;
     await db.insertProposal({ repo, kind: 'enhancement', ref_id: e.id, title, body, priority: impact.score, target_module: e.pref_label, placement: 'existing_module', evidence: { demand, trend, impact: impact.score, band: impact.band, effort: effort.size, effort_weeks: effort.weeks, related_bug: alsoBug } });
     out.push({ kind: 'enhancement', title, priority: impact.score, target_module: e.pref_label, placement: 'existing_module', body, band: impact.band, effort: effort.size });
+  }
+
+  // 4) refactor 제안 (code-health smells — 공급측 "코드=2번째 리뷰어"). 파일 단위로 묶음.
+  //    ref_id = 파일 경로(안정) — artifact id는 스캔마다 재생성돼 HITL 승인이 풀리므로 경로로 키.
+  for (const c of await db.refactorCandidates(repo)) {
+    const churn = c.churn_commits ?? 0;
+    const impact = proposalImpact({ kind: 'refactor', smellScore: c.max_score, churn });
+    const kindsKo = c.kinds.map((k) => SMELL_KO[k] ?? k).join(', ');
+    const title = `[refactor] ${c.path} — ${kindsKo} (health ${c.health_score ?? '?'})`;
+    const smellLine = c.smells.map((s) => `${SMELL_KO[s.kind] ?? s.kind}(${s.score}/${s.severity})`).join(', ');
+    const body = `## 코드 건강 신호 (공급측 — 코드가 스스로 신고)\n- 파일: \`${c.path}\` · 모듈: \`${c.module}\`\n- 메트릭: ${c.loc ?? '?'}줄 · 복잡도 ${c.cyclomatic ?? '?'} · 의존(fan-in) ${c.fan_in ?? 0} · 최근변경(churn) ${churn} · health ${c.health_score ?? '?'}/100\n- 냄새: ${smellLine}\n- **impact ${impact.score} (${impact.band})** — 부채이자(오염도 × 활동)\n\n→ 이 모듈에 기능/버그 작업을 올리기 전 정리(Preparatory Refactoring) 권장. Auto-Dev는 행위보존 검증으로 안전 리팩토링(후속 단계).`;
+    await db.insertProposal({ repo, kind: 'refactor', ref_id: c.path, title, body, priority: impact.score, target_module: c.module, placement: 'existing_module', evidence: { smells: c.smells, loc: c.loc, cyclomatic: c.cyclomatic, fan_in: c.fan_in, churn, health: c.health_score, max_score: c.max_score, impact: impact.score, band: impact.band } });
+    out.push({ kind: 'refactor', title, priority: impact.score, target_module: c.module, placement: 'existing_module', body, band: impact.band });
   }
 
   out.sort((a, b) => b.priority - a.priority);

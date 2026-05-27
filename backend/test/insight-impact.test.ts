@@ -209,6 +209,39 @@ describe('proposalImpact: cross-kind comparability (3) — the key property', ()
   });
 });
 
+describe('proposalImpact: refactor (code-health P2 — 오염도×활동, 버그 우위)', () => {
+  const ref = (smellScore: number, churn: number) => proposalImpact({ kind: 'refactor', smellScore, churn });
+
+  it('dormant-but-awful code still surfaces (churn 0 floored): 100 × 0.6 × 0.85 = 51', () => {
+    expect(ref(100, 0).score).toBeCloseTo(51, 5);
+    expect(ref(100, 0).band).toBe('high'); // not buried
+  });
+  it('score rises with churn (the interest rate) and with smell badness (the principal)', () => {
+    expect(ref(100, 0).score).toBeLessThan(ref(100, 4).score);
+    expect(ref(100, 4).score).toBeLessThan(ref(100, 20).score);
+    expect(ref(40, 10).score).toBeLessThan(ref(100, 10).score);
+  });
+  it('bug-우위: a refactor can never reach the bug ceiling (weighted ≤ 85 < ~99 critical bug)', () => {
+    const maxRefactor = ref(100, 1_000_000);
+    expect(maxRefactor.score).toBeCloseTo(85, 1); // 100 × ~1.0 × 0.85
+    expect(maxRefactor.score).toBeLessThanOrEqual(85);
+    // A well-corroborated critical bug exceeds the refactor ceiling (full-strength bug 우위). Note this is
+    // conditional on evidence: a 1-report bug would score low and could rank below a severe refactor — by design.
+    const criticalBug = proposalImpact({ kind: 'bug_fix', corroboration: 100, severity: 4, risk: 'critical', trend: 'rising' });
+    expect(maxRefactor.score).toBeLessThan(criticalBug.score);
+  });
+  it('an actively-churned critical-smell file lands in the critical band', () => {
+    expect(ref(100, 20).band).toBe('critical'); // ~84.75
+  });
+  it('stays within [0,100] for degenerate inputs', () => {
+    for (const s of [0, 50, 100, 150]) for (const c of [0, -3, NaN, 5, 99999]) {
+      const v = ref(s, c).score;
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(100);
+    }
+  });
+});
+
 describe('proposalImpact: band classification (4)', () => {
   it('maps scores to the documented cutoffs (critical>=75, high>=50, medium>=25, else low)', () => {
     const cases: Array<{ score: number; band: ImpactBand }> = [

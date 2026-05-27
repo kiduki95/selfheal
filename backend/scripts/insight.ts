@@ -16,7 +16,7 @@ async function main() {
   console.log(`생성된 제안 ${proposals.length}건 ${JSON.stringify(byKind)}\n`);
   console.log(`--- 우선순위 정렬 ---`);
   for (const p of proposals) {
-    const tag = p.kind === 'bug_fix' ? '🔴 BUG' : p.kind === 'feature_gap' ? '🟡 GAP' : '🔵 ENH';
+    const tag = p.kind === 'bug_fix' ? '🔴 BUG' : p.kind === 'feature_gap' ? '🟡 GAP' : p.kind === 'refactor' ? '🟣 REFACTOR' : '🔵 ENH';
     const place = p.kind === 'feature_gap' ? `  →배치: ${p.placement === 'new_module' ? '신규' : '기존'} ${p.target_module}` : p.target_module ? `  →${p.target_module}` : '';
     console.log(`  [P${p.priority}] ${tag}  ${p.title}${place}`);
   }

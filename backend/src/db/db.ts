@@ -633,6 +633,35 @@ export class Db {
       [repo],
     );
   }
+  // Refactor candidates (code-health P2) — files with ≥1 smell, smells aggregated per FILE (the file's
+  // own god_file/hotspot + its symbols' complex_function, joined on shared path), with file metrics.
+  async refactorCandidates(repo: string): Promise<{ path: string; module: string; loc: number | null; cyclomatic: number | null; fan_in: number | null; churn_commits: number | null; health_score: number | null; kinds: string[]; max_score: number; smells: { kind: string; score: number; severity: string }[] }[]> {
+    const rows = await this.query<{ path: string; module: string; loc: number | null; cyclomatic: number | null; fan_in: number | null; churn_commits: number | null; health_score: number | null; kinds: string[]; max_score: number; smells: { kind: string; score: number; severity: string }[] }>(
+      `SELECT f.path, f.module, f.loc, f.cyclomatic, f.fan_in, f.churn_commits, f.health_score,
+              sm.kinds, sm.max_score, sm.smells
+       FROM code_artifact_registry f
+       JOIN LATERAL (
+         SELECT array_agg(DISTINCT s.kind) AS kinds,
+                max(s.score) AS max_score,
+                jsonb_agg(jsonb_build_object('kind', s.kind, 'score', s.score, 'severity', s.severity) ORDER BY s.score DESC) AS smells
+         FROM code_smells s JOIN code_artifact_registry a ON a.id = s.artifact_id
+         WHERE s.repo = f.repo AND a.path = f.path
+       ) sm ON sm.max_score IS NOT NULL
+       WHERE f.repo = $1 AND f.kind = 'file'
+       ORDER BY sm.max_score DESC`,
+      [repo],
+    );
+    return rows.map((r) => ({
+      ...r,
+      max_score: Number(r.max_score),
+      loc: r.loc === null ? null : Number(r.loc),
+      cyclomatic: r.cyclomatic === null ? null : Number(r.cyclomatic),
+      fan_in: r.fan_in === null ? null : Number(r.fan_in),
+      churn_commits: r.churn_commits === null ? null : Number(r.churn_commits),
+      health_score: r.health_score === null ? null : Number(r.health_score),
+    }));
+  }
+
   async insertProposal(p: { repo: string; kind: string; ref_id: string | null; title: string; body: string; priority: number; target_module: string | null; placement: string | null; evidence: unknown }): Promise<void> {
     await this.query(
       `INSERT INTO proposals (repo, kind, ref_id, title, body, priority, target_module, placement, evidence)

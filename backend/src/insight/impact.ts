@@ -40,7 +40,10 @@ export type ProposalImpactInput =
       trend: Trend;
     }
   | { kind: 'feature_gap'; demand: number; verdict: 'grounded' | 'partial' | 'ungrounded'; trend: Trend }
-  | { kind: 'enhancement'; demand: number; trend: Trend };
+  | { kind: 'enhancement'; demand: number; trend: Trend }
+  // Supply-side debt (code-health P2). Not review-backed: `smellScore` (0-100) is the debt principal
+  // (how bad), `churn` is the interest rate (how often the debt is paid). See the refactor case below.
+  | { kind: 'refactor'; smellScore: number; churn: number };
 
 // --- Tuning constants (documented; tests pin the behaviour) -----------------
 
@@ -98,6 +101,17 @@ const CRITICAL_MIN = 75;
 const HIGH_MIN = 50;
 const MEDIUM_MIN = 25;
 
+// Refactor (supply-side) tuning. Priority = badness × interest × weight (user's "오염도×활동 하이브리드"):
+//   - badness  = smellScore/100 (the debt principal — how rotten the code is).
+//   - interest = churn momentum, FLOORED so dormant-but-awful code still surfaces, while an actively
+//                churned mess ranks top (CodeScene: debt you pay interest on most is worth fixing most).
+//   - weight   = discount vs demand-side: a FULL-strength bug (≈100) edges the MAX refactor (≤85). This is
+//                the "bug-우위" the user chose — at equal underlying strength the user-facing bug wins. It is
+//                NOT absolute: a weakly-corroborated bug (low evidence) can rank below a severe refactor, by
+//                design — evidence is a first-class dimension for every kind, refactor included (via churn).
+const REFACTOR_WEIGHT = 0.85;
+const REFACTOR_MOMENTUM_FLOOR = 0.6;
+
 // --- Helpers ----------------------------------------------------------------
 
 function round2(n: number): number {
@@ -142,6 +156,13 @@ export function proposalImpact(p: ProposalImpactInput): ImpactResult {
       value = ENH_VALUE;
       confidence = 1.0; // targets an existing, concrete module
       break;
+    }
+    case 'refactor': {
+      // Supply-side: badness × churn-interest × weight (see the REFACTOR_* notes above). Deterministic
+      // (no review evidence), so it's scored directly rather than through evidence×value×confidence.
+      const interest = REFACTOR_MOMENTUM_FLOOR + (1 - REFACTOR_MOMENTUM_FLOOR) * evidenceFactor(p.churn);
+      const score = round2(Math.max(0, Math.min(100, p.smellScore)) * interest * REFACTOR_WEIGHT);
+      return { score, band: bandOf(score) };
     }
   }
 
